@@ -1,0 +1,341 @@
+openapi: 3.1.0
+info:
+  title: MiniPlay local API
+  version: 0.4.0
+  description: >-
+    Public gateway contract for the local prototype. User names are demo
+    identities; this API does not authenticate accounts and is not ready for
+    public deployment. Signed run tokens bind each score to a server-issued
+    game, seed, user and expiry.
+servers:
+  - url: http://127.0.0.1:8080
+    description: Local Go gateway
+paths:
+  /api/health:
+    get:
+      summary: Check that the gateway process is answering
+      operationId: gatewayHealth
+      responses:
+        '200':
+          description: Gateway handler is available; dependencies are not checked.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+  /api/sessions:
+    post:
+      summary: Start a game run
+      operationId: createSession
+      description: >-
+        A shared Redis token bucket limits requests by remote IP. The response
+        exposes the seed so the client can draw deterministic targets. A bot
+        can also use it; score replay alone cannot prove human play.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SessionRequest'
+      responses:
+        '200':
+          description: A signed run token valid for 120 seconds.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /api/scores:
+    post:
+      summary: Submit one run for authoritative replay
+      operationId: submitScore
+      description: >-
+        The claimed score is the base replay score before a possible server
+        double-points flag. An accepted or rejected attempt consumes the run
+        ID once in PostgreSQL. A second submission returns 409. Successful
+        SQL persistence is authoritative even if Redis cache update fails.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ScoreSubmission'
+      responses:
+        '200':
+          description: Accepted and durably recorded score.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Score'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          description: Invalid or expired run token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: This run ID already has an accepted or rejected attempt.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: >-
+            Token was valid, but duration, input sequence, or claimed score
+            failed replay validation. The rejected attempt is durable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /api/leaderboards:
+    get:
+      summary: Read a top-20 board and optional caller rank
+      operationId: getLeaderboard
+      description: >-
+        Daily and weekly periods are UTC calendar windows; weekly begins on
+        Monday. Global, daily and weekly boards use Redis with SQL backfill
+        and fallback. The friends board always reads SQL and requires user.
+        A missing myRank is returned as JSON null.
+      parameters:
+        - $ref: '#/components/parameters/Game'
+        - $ref: '#/components/parameters/BoardPeriod'
+        - $ref: '#/components/parameters/User'
+      responses:
+        '200':
+          description: Top 20 users and one-based rank for the requested user.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Board'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /api/boards/live:
+    get:
+      summary: Stream a leaderboard over WebSocket
+      operationId: watchLeaderboard
+      description: >-
+        Requires a WebSocket Upgrade request. Global, daily and weekly boards
+        are supported; friends is not. The server sends an initial board
+        snapshot, then new snapshots after Redis pub/sub notifications.
+        It sends WebSocket pings every 25 seconds. Reconnect after closure.
+      parameters:
+        - $ref: '#/components/parameters/Game'
+        - $ref: '#/components/parameters/LivePeriod'
+        - $ref: '#/components/parameters/User'
+      responses:
+        '101':
+          description: Switching Protocols; subsequent frames use LiveBoardMessage.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '405':
+          description: Only GET is allowed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+      x-websocket-message:
+        $ref: '#/components/schemas/LiveBoardMessage'
+components:
+  parameters:
+    Game:
+      name: game
+      in: query
+      required: true
+      schema:
+        $ref: '#/components/schemas/Game'
+    BoardPeriod:
+      name: period
+      in: query
+      required: false
+      description: Defaults to all; friends requires a nonempty user parameter.
+      schema:
+        type: string
+        enum: [all, daily, weekly, friends]
+        default: all
+    LivePeriod:
+      name: period
+      in: query
+      required: false
+      description: Defaults to all.
+      schema:
+        $ref: '#/components/schemas/LivePeriod'
+    User:
+      name: user
+      in: query
+      required: false
+      description: Demo identity used only for myRank or the friends filter.
+      schema:
+        $ref: '#/components/schemas/User'
+  responses:
+    BadRequest:
+      description: Invalid JSON, query, user or game.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    RateLimited:
+      description: Redis token bucket rejected this request.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Unavailable:
+      description: A required cache or SQL operation failed.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+  schemas:
+    Game:
+      type: string
+      enum: [rhythm, reflex]
+    LivePeriod:
+      type: string
+      enum: [all, daily, weekly]
+      default: all
+    User:
+      type: string
+      minLength: 1
+      maxLength: 40
+      pattern: '^[A-Za-z0-9_-]+$'
+    Tap:
+      type: object
+      additionalProperties: false
+      required: [ms, x, y]
+      properties:
+        ms:
+          type: integer
+          minimum: 0
+          maximum: 10250
+          description: Milliseconds from run start.
+        x:
+          type: integer
+          minimum: 0
+          maximum: 1000
+        y:
+          type: integer
+          minimum: 0
+          maximum: 1000
+    SessionRequest:
+      type: object
+      additionalProperties: false
+      required: [user, game]
+      properties:
+        user:
+          $ref: '#/components/schemas/User'
+        game:
+          $ref: '#/components/schemas/Game'
+    Session:
+      type: object
+      required: [token, runId, seed, expiresAt]
+      properties:
+        token:
+          type: string
+          description: HMAC-signed base64url claims and signature.
+        runId:
+          type: string
+        seed:
+          type: string
+        expiresAt:
+          type: integer
+          format: int64
+          description: Unix milliseconds.
+    ScoreSubmission:
+      type: object
+      additionalProperties: false
+      required: [token, events, score, durationMs]
+      properties:
+        token:
+          type: string
+        events:
+          type: array
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/Tap'
+        score:
+          type: integer
+          minimum: 0
+          maximum: 195
+          description: Client's base score before the server's feature flag.
+        durationMs:
+          type: integer
+          minimum: 9500
+          maximum: 12000
+    Score:
+      type: object
+      required: [runId, user, game, score, durationMs, submittedAt]
+      properties:
+        runId:
+          type: string
+        user:
+          $ref: '#/components/schemas/User'
+        game:
+          $ref: '#/components/schemas/Game'
+        score:
+          type: integer
+          minimum: 0
+          maximum: 390
+        durationMs:
+          type: integer
+        submittedAt:
+          type: string
+          format: date-time
+    Leader:
+      type: object
+      required: [user, score]
+      properties:
+        user:
+          $ref: '#/components/schemas/User'
+        score:
+          type: integer
+          minimum: 0
+    Board:
+      type: object
+      required: [leaders, myRank]
+      properties:
+        leaders:
+          type: array
+          maxItems: 20
+          items:
+            $ref: '#/components/schemas/Leader'
+        myRank:
+          type: [integer, 'null']
+          minimum: 1
+    LiveBoardMessage:
+      type: object
+      required: [type, game, period, board]
+      properties:
+        type:
+          const: board
+        game:
+          $ref: '#/components/schemas/Game'
+        period:
+          $ref: '#/components/schemas/LivePeriod'
+        board:
+          $ref: '#/components/schemas/Board'
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+    Health:
+      type: object
+      required: [status]
+      properties:
+        status:
+          const: ok
