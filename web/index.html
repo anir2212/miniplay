@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no" />
+  <title>MiniPlay</title>
+</head>
+<body>
+  <main>
+    <header><h1>MiniPlay</h1><p>Short games, honest scores.</p></header>
+    <section class="controls" aria-label="Game controls">
+      <label>Player <input id="user" maxlength="40" value="player1" autocomplete="off" /></label>
+      <label>Game <select id="game"><option value="rhythm">Pulse Field</option><option value="reflex">Comet Catch</option></select></label>
+      <button id="start">Start</button>
+    </section>
+    <p id="status" role="status">Ready. Tap the pulses or catch the comets.</p>
+    <div id="canvas" aria-label="Game canvas"></div>
+    <section aria-labelledby="leaderboard-title"><h2 id="leaderboard-title">Leaderboard</h2><ol id="leaderboard"></ol></section>
+  </main>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

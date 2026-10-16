@@ -1,0 +1,14 @@
+.toolchain/
+.npm-cache/
+.cache/
+node_modules/
+web/dist/
+web/test-results/
+web/playwright-report/
+coverage/
+*.log
+.env
+flutter_host/.dart_tool/
+flutter_host/build/
+flutter_host/.flutter-plugins-dependencies
+
