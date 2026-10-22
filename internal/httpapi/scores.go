@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"net"
 	"net/http"
 
 	"miniplay/internal/game"
@@ -51,10 +50,7 @@ func ScoreHandler(signer *token.Signer, db AttemptStore, cache ScoreCache, clock
 			failure(w, 400, err.Error())
 			return
 		}
-		ip, _, err := net.SplitHostPort(r.RemoteAddr)
-		if err != nil {
-			ip = r.RemoteAddr
-		}
+		ip := clientIP(r)
 		allowed, err := cache.Allow(r.Context(), "score-ip:"+ip, 30, 1)
 		if err != nil {
 			failure(w, 503, "rate limiter unavailable")

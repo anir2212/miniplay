@@ -111,3 +111,65 @@ func TestRedisBoardRecoveryIntegration(t *testing.T) {
 		t.Fatalf("new score should invalidate empty marker: ready=%t err=%v", ready, err)
 	}
 }
+
+// A replayed or lower score leaves the board unchanged and must not wake live sockets.
+func TestRedisBoardPublishesOnlyChangesIntegration(t *testing.T) {
+	url := os.Getenv("MINIPLAY_TEST_REDIS_URL")
+	if url == "" {
+		t.Skip("set MINIPLAY_TEST_REDIS_URL to a disposable loopback Redis database 15")
+	}
+	opts, err := redis.ParseURL(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host, _, err := net.SplitHostPort(opts.Addr)
+	ip := net.ParseIP(host)
+	if err != nil || opts.DB != 15 || (host != "localhost" && (ip == nil || !ip.IsLoopback())) {
+		t.Fatal("integration test requires a loopback Redis URL selecting database 15")
+	}
+	ctx := context.Background()
+	cache, err := OpenRedis(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cache.Client.Close()
+	at := time.Date(2038, 3, 9, 12, 0, 0, 0, time.UTC)
+	var keys []string
+	for _, period := range []Period{All, Daily, Weekly} {
+		key, _, err := BoardKey(game.Rhythm, period, at)
+		if err != nil {
+			t.Fatal(err)
+		}
+		keys = append(keys, key, boardMarker(key))
+	}
+	if count, err := cache.Client.Exists(ctx, keys...).Result(); err != nil || count != 0 {
+		t.Fatalf("test keys already exist (count=%d, err=%v); use an empty disposable Redis DB 15", count, err)
+	}
+	defer func() { _ = cache.Client.Del(context.Background(), keys...).Err() }()
+	key, _, _ := BoardKey(game.Rhythm, All, at)
+	sub := cache.Client.Subscribe(ctx, "updates:"+key)
+	defer sub.Close()
+	if _, err := sub.Receive(ctx); err != nil {
+		t.Fatal(err)
+	}
+	messages := sub.Channel()
+	for _, score := range []int{30, 30, 20, 45} { // new, replay, lower, higher
+		if err := cache.UpdateBoards(ctx, Score{User: "erin", Game: game.Rhythm, Score: score, SubmittedAt: at}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := 0
+	timeout := time.After(500 * time.Millisecond)
+collect:
+	for {
+		select {
+		case <-messages:
+			got++
+		case <-timeout:
+			break collect
+		}
+	}
+	if got != 2 {
+		t.Fatalf("published %d updates for new, replay, lower, higher; want 2", got)
+	}
+}

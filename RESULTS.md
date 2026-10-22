@@ -1,6 +1,6 @@
 # Measured results and acceptance
 
-Results below were collected locally on 2026-10-12, 2026-10-13, 2026-10-15, and 2026-10-16. No load, GPU, or cloud benchmark has been run for MiniPlay.
+Results below were collected locally on 2026-10-12, 2026-10-13, 2026-10-15, 2026-10-16 and 2026-10-22. A local load profile was run on 2026-10-22 (below); no GPU or cloud benchmark has been run.
 
 | Check | Result | Command or evidence |
 |---|---:|---|
@@ -24,10 +24,69 @@ Results below were collected locally on 2026-10-12, 2026-10-13, 2026-10-15, and 
 | Incomplete-board fallback | Two focused handler cases passed: failed backfill falls back to a complete SQL answer; when SQL also fails, returns 503 without reading the partial Redis board | `go test ./internal/httpapi -run TestLeaderboardBackfillFailureDoesNotServePartialCache -count=1 -v` (2026-10-16); fake dependencies |
 | OpenAPI document structure | Parsed five public paths and resolved all 43 local `$ref` targets | Ruby YAML parser and local-reference walk on `api/openapi.yaml` (2026-10-16); no live contract test |
 
+## Android emulator session, 22 October 2026 (afternoon)
+
+The Flutter host was built as a debug APK with `MINIPLAY_URL=http://10.0.2.2:18080` and demo user `droid1` (Flutter 3.44.1, Gradle 9.1.0). It ran on a headless Android 14 (API 34) Pixel 6 emulator with WebView 113. The stack was the disposable one used for the load profile, with the gateway serving a fresh `web/dist`. Evidence: [`evidence/android_emulator_2026-10-22.json`](evidence/android_emulator_2026-10-22.json), with two screenshots.
+
+- The WebView loaded the gateway page from the emulator, and the host filled in the player name.
+- After tapping Start, 16 taps were sent with `adb input` during the ten seconds and 15 registered. The page showed "Finished rhythm: 100 points". The host's own status bar showed "rhythm: 100 points · taps: 15", so the bridge messages arrived and passed its parser.
+- SQL held one accepted attempt and one score (droid1, rhythm, 100, 10,009 ms), one published outbox event, one processed event and a daily count of 1. The REST board and the in-app board both listed droid1 with 100.
+- With the app idle, two players were scored from the Mac (180 each). The app's board updated to show them above droid1 without any touch, so its live socket worked through the gateway.
+- Plain HTTP loaded because Flutter's Gradle plugin sets `usesCleartextTraffic` in debug builds; the app's own manifests do not allow it.
+
+Limits: one emulator session with injected taps, not a person on a physical phone, over cleartext to the Mac's loopback, with a demo identity.
+
+## Load profile and two fixes, 22 October 2026 (afternoon)
+
+The six services ran natively on the M3 Pro (11 cores, 18 GiB), with a disposable PostgreSQL 18.6 cluster, Redis 7.4.11 and a single-node Kafka 3.9.1 on loopback. Each step started from a new cluster and new containers, and a new per-run secret that was not recorded. `cmd/load-probe` ran on the same Mac. New games started at a fixed rate for 60 seconds. Each game opened the player's live board, started a session, waited the real ten seconds, submitted 12 replayed hits, and timed how long the player's rank took to reach the socket. Fifty idle watchers stayed connected throughout, and the leaderboard was read 10 times a second. Each game used its own user and a synthetic client address from 198.18.0.0/15. Evidence: [`evidence/load_profile_2026-10-22.json`](evidence/load_profile_2026-10-22.json).
+
+| New games a second | Games | Session p50 / p99 | Score p50 / p99 | Rank frame p50 / p95 / p99 | Leaderboard p50 / p99 | leaderboard-svc CPU avg / peak |
+|---:|---:|---:|---:|---:|---:|---:|
+| 5 | 300 | 1.9 / 11.5 ms | 19.9 / 40.3 ms | 27.1 / 41.7 / 46.5 ms | 4.0 / 7.4 ms | 20% / 34% |
+| 10 | 600 | 1.2 / 6.6 ms | 15.7 / 22.6 ms | 24.0 / 30.9 / 32.4 ms | 2.5 / 10.4 ms | 54% / 90% |
+| 20 | 1,200 | 1.7 / 9.7 ms | 10.9 / 35.8 ms | 21.9 / 40.0 / 47.0 ms | 9.9 / 24.7 ms | 122% / 179% |
+| 40 | 2,400 | 6.3 / 17.1 ms | 34.1 / 53.8 ms | 50.1 / 85.0 / 105.7 ms | 37.2 / 69.1 ms | 168% / 219% |
+
+Every game was accepted, and there were no HTTP or socket errors. After each step SQL held exactly one attempt, score, published outbox event, processed event and daily-aggregate count per game. At 40 a second there were about 420 player sockets plus the 50 watchers. The leaderboard service did most of the work; the gateway peaked at 41% and every other service stayed under 10%. Every board change makes each socket rebuild and send a frame. Updates that arrive while a frame is being built fold into the next one, so watchers received fewer frames than there were changes. The saturation point was not reached.
+
+**Defect 1: one rate-limit bucket for everyone.** The session and score limits keyed on the TCP peer. Behind the gateway that is always the gateway's loopback address, so all players shared one bucket: 30 session starts, then 0.5 a second for everyone together. [`clientip.go`](internal/httpapi/clientip.go) now reads `X-Forwarded-For` only when the peer is a trusted proxy (`MINIPLAY_TRUSTED_PROXIES`, default loopback). It reads from the right, skips trusted hops and uses the first untrusted address. A new test sends two clients through a real reverse proxy: the old code keyed both as `session-ip:127.0.0.1`, the new code keys them separately. Through the gateway, 40 starts from one client still gave 30 accepted and 10 refused with 429.
+
+**Defect 2: two wake-ups per score.** The score service and the stats worker both update the boards for every accepted score, and the update script published a notification each time, even when nothing changed. The script now uses `ZADD GT CH` and publishes only on a change. An opt-in Redis test counted 4 notifications for a new, a replayed, a lower and a higher score with the old script, and 2 with the new one. An A/B at 40 games a second (baseline, fix, baseline, fix, each on a fresh stack) gave:
+
+| At 40 a second | Baseline runs | Fix runs |
+|---|---:|---:|
+| Rank frame p50 / p99 | 49.9–50.1 / 94.6–111.0 ms | 39.7–40.5 / 72.1–74.6 ms |
+| Score p99 | 49.7–56.2 ms | 37.9–40.3 ms |
+| Leaderboard p99 | 60.5–69.4 ms | 42.1–45.2 ms |
+| leaderboard-svc CPU average | 169–173% | 171–181% |
+
+Both fix runs beat both baseline runs on every p50, p95 and p99 measured. CPU did not fall, because at this load the service still runs flat out, but less of its work is wasted.
+
+Checks: `go build`, `go vet` and `go test ./...` passed, with 3 new `httpapi` tests and 2 new `load-probe` tests. Both opt-in Redis tests passed against a disposable Redis DB 15. Limits: one machine, with the probe sharing its CPU. Profile steps are single runs, and the A/B has two runs per variant. The players are synthetic, with no device or mobile network. This is not a capacity claim for any deployment.
+
+## Combined local stack, 22 October 2026
+
+All six Go services ran against a disposable PostgreSQL 18.6 database, Redis 7.4.11 and a single-node Kafka 3.9.1 broker, all on loopback. `cmd/e2e-probe` drove the public gateway contract ([evidence](evidence/integration_2026-10-22.json)).
+
+| Check | Result |
+|---|---|
+| Score path | Runs of 180, 100 and 50 points were accepted (200), and each replay returned 409. The live WebSocket frame showed each new score 6–8 ms after submission. |
+| Live board after cache loss | With the all-time Redis board deleted and its marker stale, the frame after the next score listed **3 of 3** leaders, matching SQL. The same case listed 1 of 3 on 20 October, before the live handler shared `completeBoard`. |
+| Durable records | After three runs: 3 attempts, 3 scores, 3 outbox events published, 3 processed events, daily aggregate 3 accepted / sum 330, consumer lag 0. REST all-time, daily and weekly boards equalled SQL best scores. |
+| Abuse cases | Bad user or media type 400, unknown path 404, bad period 400, expired or tampered token 401, invalid taps, score mismatch or short duration 422, resubmitted rejected run 409. |
+| Worker crash after SQL, before Redis repair and offset commit | The worker stopped on the Redis timeout with the aggregate applied and one record uncommitted. After restart, the replay did not double-count (4 accepted, 7 processed), repaired the Redis board and committed (lag 0). |
+| Redis outage and data loss | While Redis was down, leaderboards were served complete from SQL (200) and sessions returned a controlled 503. After a restart with empty data, boards rebuilt from SQL, and a partial one-score daily key was backfilled to 5 players on the next read. |
+| Malformed events | 2 of 2 went to `score.deadletter` with a reason; the worker kept running and processed the next valid event. |
+| Real browser | Headless Chrome 155 on the gateway-served page completed a no-tap run ("Finished rhythm: 0 points"). The player appeared on the live board and in SQL and Redis. |
+| End state | 9 attempts (6 scores, 3 rejections), 9 outbox events all published, 9 processed, daily 6 / 3 / 520 before the browser run; Redis equalled SQL best scores after every check. |
+
+This is one functional run on one machine with demo users. It is not a load or latency measurement, and no Android emulator was used.
+
 ## Pending evidence
 
-- Android emulator WebView run and real browser-to-Go score submission.
-- Combined PostgreSQL/Redis/Kafka integration, full HTTP scoring, real worker restart correctness, Redis pub/sub through the live board endpoint, and database-backed cheat injection evaluation. PostgreSQL and Redis checks were separate; the board repair retry uses fakes and no broker.
+- A physical-phone run. (An Android emulator run with injected taps passed on 22 October, below.)
+- Database-backed cheat injection evaluation (abuse checks so far are request-level).
+- The 22 October combined run covered integration, worker restart, Redis loss and dead letters once; it is not repeated under load.
 - k6 concurrency and latency measurements with hardware specs; pprof before/after.
 - Docker Compose, kind/Helm, and remote CI execution.
 

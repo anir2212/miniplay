@@ -1,0 +1,210 @@
+{
+  "what": "Combined local MiniPlay stack: browser-style probe -> Go gateway/session/score/leaderboard -> PostgreSQL -> outbox -> Kafka -> stats worker -> Redis boards and WebSocket",
+  "date": "2026-10-22",
+  "environment": {
+    "go": "1.27.2 (project .toolchain)",
+    "postgresql": "18.6 disposable cluster, 127.0.0.1:55432, database miniplay_it",
+    "redis": "7.4.11 container, 127.0.0.1:16379, database 15",
+    "kafka": "apache/kafka 3.9.1 single-node KRaft container, 127.0.0.1:19092, topics score.events and score.deadletter (3 partitions)",
+    "probe": "cmd/e2e-probe against the gateway on 127.0.0.1:18080",
+    "hmac_secret": "per-run random value, not recorded"
+  },
+  "play_runs": [
+    {
+      "case": "first score",
+      "user": "alice",
+      "socket_held_ms": 0,
+      "score_status": 200,
+      "replay_status": 409,
+      "expected_score": 180,
+      "frame_score": 180,
+      "frame_after_score_ms": 6,
+      "frame_leaders": 1,
+      "socket_error": null
+    },
+    {
+      "case": "socket held 20 s before the run",
+      "user": "bob",
+      "socket_held_ms": 20001,
+      "score_status": 200,
+      "replay_status": 409,
+      "expected_score": 100,
+      "frame_score": 100,
+      "frame_after_score_ms": 7,
+      "frame_leaders": 2,
+      "socket_error": null
+    },
+    {
+      "case": "all-time Redis board deleted, completeness marker left stale",
+      "user": "carol",
+      "socket_held_ms": 4002,
+      "score_status": 200,
+      "replay_status": 409,
+      "expected_score": 50,
+      "frame_score": 50,
+      "frame_after_score_ms": 8,
+      "frame_leaders": 3,
+      "socket_error": null
+    },
+    {
+      "case": "score made while worker and publisher stopped (worker-crash setup)",
+      "user": "dave",
+      "socket_held_ms": 0,
+      "score_status": 200,
+      "replay_status": 409,
+      "expected_score": 120,
+      "frame_score": 120,
+      "frame_after_score_ms": 5,
+      "frame_leaders": 4,
+      "socket_error": null
+    },
+    {
+      "case": "after Redis restarted with an empty database",
+      "user": "erin",
+      "socket_held_ms": 0,
+      "score_status": 200,
+      "replay_status": 409,
+      "expected_score": 30,
+      "frame_score": 30,
+      "frame_after_score_ms": 2,
+      "frame_leaders": 5,
+      "socket_error": null
+    },
+    {
+      "case": "after two malformed events were sent to score.events",
+      "user": "frank",
+      "socket_held_ms": 0,
+      "score_status": 200,
+      "replay_status": 409,
+      "expected_score": 40,
+      "frame_score": 40,
+      "frame_after_score_ms": 6,
+      "frame_leaders": 6,
+      "socket_error": null
+    }
+  ],
+  "abuse_cases": [
+    {
+      "case": "session-invalid-user",
+      "status": 400,
+      "error": "invalid user or game"
+    },
+    {
+      "case": "session-wrong-media-type",
+      "status": 400,
+      "error": "content-type must be application/json"
+    },
+    {
+      "case": "gateway-unknown-api",
+      "status": 404,
+      "error": "404 page not found"
+    },
+    {
+      "case": "leaderboard-invalid-period",
+      "status": 400,
+      "error": "invalid game or period"
+    },
+    {
+      "case": "expired-token",
+      "status": 401,
+      "error": "invalid or expired run token"
+    },
+    {
+      "case": "tampered-user-claim",
+      "status": 401,
+      "error": "invalid or expired run token"
+    },
+    {
+      "case": "invalid-tap-coordinates",
+      "status": 422,
+      "error": "invalid input events"
+    },
+    {
+      "case": "rejected-run-resubmitted",
+      "status": 409,
+      "error": "run already submitted"
+    },
+    {
+      "case": "claimed-score-mismatch",
+      "status": 422,
+      "error": "score mismatch"
+    },
+    {
+      "case": "short-duration",
+      "status": 422,
+      "error": "implausible duration"
+    }
+  ],
+  "worker_crash": {
+    "setup": "publisher and worker stopped; dave scored; worker started; Redis paused; publisher started",
+    "worker_exit": "worker stopped before offset commit: i/o timeout",
+    "after_failure": {
+      "daily_accepted": 4,
+      "processed_events": 7,
+      "partition_0_lag": 1
+    },
+    "replay_after_restart": {
+      "daily_accepted": 4,
+      "processed_events": 7,
+      "lag_all_partitions": 0,
+      "weekly_redis_key_repaired": true,
+      "rest_weekly_leaders": 4
+    }
+  },
+  "redis_loss": {
+    "leaderboard_all_while_down": "200, 4 leaders from SQL",
+    "leaderboard_daily_while_down": "200, 4 leaders from SQL",
+    "session_while_down": "503 rate limiter unavailable",
+    "after_restart_and_flush": "first read rebuilt all-time board from SQL (4 members, marker set); partial daily key (1 member, no marker) was backfilled to 5 on the next read"
+  },
+  "dead_letter": {
+    "malformed_sent": 2,
+    "deadletter_records": 2,
+    "reasons": [
+      "invalid character 'o' in literal null (expecting 'u')",
+      "missing or invalid event identity"
+    ],
+    "worker_kept_running": true,
+    "next_valid_event_processed": true
+  },
+  "final_sql_counts": {
+    "run_attempts": 9,
+    "scores": 6,
+    "rejections": 3,
+    "outbox_events": 9,
+    "outbox_published": 9,
+    "processed_events": 9,
+    "daily_stats": {
+      "game": "rhythm",
+      "day": "2026-10-21",
+      "accepted": 6,
+      "rejected": 3,
+      "score_sum": 520
+    },
+    "note": "Counts above were taken before the browser run, which added one accepted attempt (daily accepted 7)."
+  },
+  "redis_vs_sql": "After every check the Redis all-time, daily and weekly boards matched SQL best scores per user.",
+  "limits": [
+    "One machine, loopback only, synthetic demo users; not a load or capacity test.",
+    "No Android emulator run.",
+    "The browser run made no taps (score 0); scoring of real taps is covered by the probe runs, which replay exact target taps."
+  ],
+  "browser_run": {
+    "browser": "headless Google Chrome 155.0.8059.85 via Playwright, page served by the Go gateway from web/dist",
+    "user": "grace",
+    "taps": 0,
+    "status_text": "Finished rhythm: 0 points",
+    "live_leaderboard_shown": [
+      "alice: 180",
+      "dave: 120",
+      "bob: 100",
+      "carol: 50",
+      "frank: 40",
+      "erin: 30",
+      "grace: 0"
+    ],
+    "sql_score_row": true,
+    "daily_accepted_after": 7,
+    "redis_all_time_score": 0
+  }
+}
