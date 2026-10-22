@@ -1,0 +1,33 @@
+{
+ "what": "First Android emulator session: the Flutter host played one real tapped game through the local stack and showed a live board update",
+ "date": "2026-10-22",
+ "device": {
+  "emulator": "Android Emulator AVD Pixel_6_API_34 (arm64-v8a), Android 14 (API 34), headless, SwiftShader GPU",
+  "webview": "Android System WebView 113.0.5672.136"
+ },
+ "app": {
+  "build": "flutter build apk --debug with --dart-define=MINIPLAY_URL=http://10.0.2.2:18080 and MINIPLAY_USER=droid1",
+  "flutter": "3.44.1 stable",
+  "gradle": "9.1.0 wrapper; the first build installed NDK 28.2.13676358 into the local Android SDK and took 237 s",
+  "cleartext": "The merged debug manifest has usesCleartextTraffic=true (added by Flutter's Gradle plugin for debug builds only); the app's own manifests do not allow cleartext, so a release build still needs HTTPS."
+ },
+ "stack": "Same disposable stack as the load profile: PostgreSQL 18.6 on 127.0.0.1:55432, Redis 7.4.11 and Kafka 3.9.1 containers, the six Go services, gateway on 127.0.0.1:18080 serving the freshly built web/dist; the emulator reaches the Mac's loopback as 10.0.2.2. A new per-run secret was used and not recorded.",
+ "steps_and_observations": [
+  "Launched the host activity. The WebView loaded the gateway page over http://10.0.2.2:18080 and the host filled the player field with droid1.",
+  "Tapped Start, then tapped the pulse 16 times with adb input over the ten-second game (15 taps registered).",
+  "The page showed 'Finished rhythm: 100 points'; the Flutter host's bridge bar showed 'rhythm: 100 points \u00b7 taps: 15', so start/progress/finish messages crossed the bridge and passed its parser.",
+  "SQL then held 1 attempt (accepted), 1 score (droid1, rhythm, 100, duration 10,009 ms), 1 outbox event (published), 1 processed event and a daily accepted count of 1. The REST all-time board listed droid1 with 100.",
+  "The in-app leaderboard listed '1. droid1: 100'.",
+  "With the app idle, two players were scored from the Mac with cmd/load-probe (180 each). Without touching the emulator, its leaderboard updated to show both above droid1, so the WebView's live socket through the gateway delivered the frames.",
+  "Final SQL: 3 attempts, 3 scores, 3 outbox events all published, 3 processed events, daily accepted 3."
+ ],
+ "screenshots": [
+  "evidence/android_2026-10-22/finished_game.png",
+  "evidence/android_2026-10-22/live_board_update.png"
+ ],
+ "limits": [
+  "One emulator session with taps injected by adb, not a person playing on a physical phone.",
+  "Debug build over cleartext HTTP to the host's loopback; no release build, HTTPS or real network.",
+  "Demo user ID supplied by the host; no authenticated identity."
+ ]
+}

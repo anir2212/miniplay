@@ -1,0 +1,806 @@
+{
+ "what": "MiniPlay load profile through the gateway on a disposable local stack, a shared rate-limit bucket found and fixed, and an A/B of publishing board updates only on change",
+ "date": "2026-10-22",
+ "hardware": "Apple M3 Pro (11 cores), 18 GiB memory, macOS 15.3.1; services ran natively, Redis and Kafka in Docker Desktop",
+ "versions": {
+  "go": "1.27.2 (project .toolchain)",
+  "postgresql": "18.6 (Homebrew binaries, disposable cluster on 127.0.0.1:55432)",
+  "redis": "7.4.11 container on 127.0.0.1:16379",
+  "kafka": "apache/kafka 3.9.1 single-node KRaft container on 127.0.0.1:19092, topics score.events and score.deadletter (3 partitions)"
+ },
+ "stack": "migrate, session-svc :18081, score-svc :18082, leaderboard-svc :18083, gateway :18080, outbox-publisher and stats-worker, built from the working tree; a new per-run HMAC secret that was not recorded. Every step started from a new PostgreSQL cluster and new Redis and Kafka containers, removed afterwards.",
+ "probe": {
+  "tool": "cmd/load-probe, run natively on the same Mac",
+  "per_run": "open the player's live board socket, POST /api/sessions, wait 10.2 s (the real game window), POST /api/scores with 12 replayed hits, then time from the score submission to the first frame carrying the player's rank",
+  "background": "50 idle live-board sockets for the whole step and 10 GET /api/leaderboards a second",
+  "clients": "each run uses its own user and its own synthetic client address from 198.18.0.0/15 in X-Forwarded-For; the services believe it only because the probe and gateway connect from loopback, which is a trusted proxy range",
+  "duration": "new runs start at a fixed rate for 60 s; each step then waits for the last runs to finish",
+  "cpu": "ps sampled every 2 s for each service process"
+ },
+ "limit_check_smoke": {
+  "what": "40 session starts from one synthetic client through the gateway, after the fix",
+  "status_counts": {
+   "200": 30,
+   "429": 10
+  },
+  "meaning": "the per-client burst of 30 still applies to one client"
+ },
+ "findings": {
+  "shared_rate_limit_bucket": {
+   "problem": "The session and score services keyed their per-IP limits on RemoteAddr. Behind the gateway (httputil.NewSingleHostReverseProxy) every request arrives from the gateway's loopback address, so all players shared one bucket: a burst of 30 session starts, then 0.5 a second for everyone together.",
+   "fix": "internal/httpapi/clientip.go: when the direct peer is a trusted proxy (MINIPLAY_TRUSTED_PROXIES, default 127.0.0.0/8 and ::1), read X-Forwarded-For from the right, skip trusted hops and use the first untrusted address; a direct untrusted peer is used as is and its header ignored.",
+   "test": "TestSessionLimitKeysOnClientBehindGatewayProxy sends two clients through the real reverse proxy; on the old code both were keyed session-ip:127.0.0.1, now each has its own key."
+  },
+  "double_publish": {
+   "problem": "Both score-svc and stats-worker call UpdateBoards for every accepted score, and the Lua script published a notification each time, even when ZADD GT changed nothing. Each notification makes every live socket on that board rebuild a frame (Redis read, rank lookup, completeness check), which is the work that grows with sockets times updates.",
+   "fix": "ZADD GT CH returns how many members changed; the script publishes only when that is above zero. A replay or a lower score no longer wakes sockets; a new key, a higher score or a repair after Redis loss still does.",
+   "test": "TestRedisBoardPublishesOnlyChangesIntegration (opt-in, Redis DB 15): new, replay, lower, higher published 4 notifications with the old script and 2 with the new one."
+  }
+ },
+ "profile_before_publish_fix": [
+  {
+   "label": "rate_5",
+   "new_runs_per_s": 5,
+   "scheduled_runs": 300,
+   "elapsed_s": 70.0,
+   "approx_player_sockets": 52,
+   "idle_watchers": 50,
+   "watcher_frames": 29950,
+   "results": {
+    "leaderboard": {
+     "count": 700,
+     "p50Ms": 3.998,
+     "p95Ms": 6.209,
+     "p99Ms": 7.358,
+     "maxMs": 15.477,
+     "errors": 0,
+     "status": {
+      "200": 700
+     }
+    },
+    "live_rank_frame": {
+     "count": 300,
+     "p50Ms": 27.055,
+     "p95Ms": 41.679,
+     "p99Ms": 46.527,
+     "maxMs": 52.161,
+     "errors": 0
+    },
+    "score": {
+     "count": 300,
+     "p50Ms": 19.91,
+     "p95Ms": 34.951,
+     "p99Ms": 40.28,
+     "maxMs": 42.459,
+     "errors": 0,
+     "status": {
+      "200": 300
+     }
+    },
+    "session": {
+     "count": 300,
+     "p50Ms": 1.883,
+     "p95Ms": 8.626,
+     "p99Ms": 11.539,
+     "maxMs": 11.911,
+     "errors": 0,
+     "status": {
+      "200": 300
+     }
+    }
+   },
+   "sql_after": {
+    "run_attempts": 300,
+    "scores": 300,
+    "outbox_rows": 300,
+    "outbox_unpublished": 0,
+    "processed_events": 300,
+    "daily_accepted_sum": 300
+   },
+   "host_load_avg_before_after": [
+    "3.51 3.61 4.70",
+    "2.66 3.43 4.56"
+   ],
+   "process_cpu": {
+    "gateway": {
+     "avg_pct": 5,
+     "peak_pct": 9
+    },
+    "leaderboard-svc": {
+     "avg_pct": 20,
+     "peak_pct": 34
+    },
+    "load-probe": {
+     "avg_pct": 4,
+     "peak_pct": 7
+    },
+    "outbox-publisher": {
+     "avg_pct": 0,
+     "peak_pct": 1
+    },
+    "score-svc": {
+     "avg_pct": 1,
+     "peak_pct": 1
+    },
+    "session-svc": {
+     "avg_pct": 0,
+     "peak_pct": 0
+    },
+    "stats-worker": {
+     "avg_pct": 0,
+     "peak_pct": 1
+    }
+   }
+  },
+  {
+   "label": "rate_10",
+   "new_runs_per_s": 10,
+   "scheduled_runs": 600,
+   "elapsed_s": 70.1,
+   "approx_player_sockets": 105,
+   "idle_watchers": 50,
+   "watcher_frames": 59950,
+   "results": {
+    "leaderboard": {
+     "count": 701,
+     "p50Ms": 2.54,
+     "p95Ms": 7.462,
+     "p99Ms": 10.392,
+     "maxMs": 42.984,
+     "errors": 0,
+     "status": {
+      "200": 701
+     }
+    },
+    "live_rank_frame": {
+     "count": 600,
+     "p50Ms": 23.998,
+     "p95Ms": 30.872,
+     "p99Ms": 32.381,
+     "maxMs": 79.693,
+     "errors": 0
+    },
+    "score": {
+     "count": 600,
+     "p50Ms": 15.679,
+     "p95Ms": 18.963,
+     "p99Ms": 22.645,
+     "maxMs": 70.863,
+     "errors": 0,
+     "status": {
+      "200": 600
+     }
+    },
+    "session": {
+     "count": 600,
+     "p50Ms": 1.227,
+     "p95Ms": 3.62,
+     "p99Ms": 6.575,
+     "maxMs": 9.055,
+     "errors": 0,
+     "status": {
+      "200": 600
+     }
+    }
+   },
+   "sql_after": {
+    "run_attempts": 600,
+    "scores": 600,
+    "outbox_rows": 600,
+    "outbox_unpublished": 0,
+    "processed_events": 600,
+    "daily_accepted_sum": 600
+   },
+   "host_load_avg_before_after": [
+    "3.00 3.46 4.55",
+    "6.36 4.65 4.92"
+   ],
+   "process_cpu": {
+    "gateway": {
+     "avg_pct": 11,
+     "peak_pct": 18
+    },
+    "leaderboard-svc": {
+     "avg_pct": 54,
+     "peak_pct": 90
+    },
+    "load-probe": {
+     "avg_pct": 9,
+     "peak_pct": 15
+    },
+    "outbox-publisher": {
+     "avg_pct": 0,
+     "peak_pct": 0
+    },
+    "score-svc": {
+     "avg_pct": 1,
+     "peak_pct": 2
+    },
+    "session-svc": {
+     "avg_pct": 0,
+     "peak_pct": 1
+    },
+    "stats-worker": {
+     "avg_pct": 1,
+     "peak_pct": 2
+    }
+   }
+  },
+  {
+   "label": "rate_20",
+   "new_runs_per_s": 20,
+   "scheduled_runs": 1200,
+   "elapsed_s": 70.2,
+   "approx_player_sockets": 210,
+   "idle_watchers": 50,
+   "watcher_frames": 111456,
+   "results": {
+    "leaderboard": {
+     "count": 702,
+     "p50Ms": 9.895,
+     "p95Ms": 19.491,
+     "p99Ms": 24.696,
+     "maxMs": 45.628,
+     "errors": 0,
+     "status": {
+      "200": 702
+     }
+    },
+    "live_rank_frame": {
+     "count": 1200,
+     "p50Ms": 21.936,
+     "p95Ms": 39.998,
+     "p99Ms": 46.955,
+     "maxMs": 99.596,
+     "errors": 0
+    },
+    "score": {
+     "count": 1200,
+     "p50Ms": 10.911,
+     "p95Ms": 31.11,
+     "p99Ms": 35.781,
+     "maxMs": 62.419,
+     "errors": 0,
+     "status": {
+      "200": 1200
+     }
+    },
+    "session": {
+     "count": 1200,
+     "p50Ms": 1.717,
+     "p95Ms": 7.958,
+     "p99Ms": 9.681,
+     "maxMs": 11.454,
+     "errors": 0,
+     "status": {
+      "200": 1200
+     }
+    }
+   },
+   "sql_after": {
+    "run_attempts": 1200,
+    "scores": 1200,
+    "outbox_rows": 1200,
+    "outbox_unpublished": 0,
+    "processed_events": 1200,
+    "daily_accepted_sum": 1200
+   },
+   "host_load_avg_before_after": [
+    "6.73 4.81 4.97",
+    "11.92 6.60 5.62"
+   ],
+   "process_cpu": {
+    "gateway": {
+     "avg_pct": 26,
+     "peak_pct": 39
+    },
+    "leaderboard-svc": {
+     "avg_pct": 122,
+     "peak_pct": 179
+    },
+    "load-probe": {
+     "avg_pct": 22,
+     "peak_pct": 33
+    },
+    "outbox-publisher": {
+     "avg_pct": 0,
+     "peak_pct": 1
+    },
+    "score-svc": {
+     "avg_pct": 2,
+     "peak_pct": 2
+    },
+    "session-svc": {
+     "avg_pct": 0,
+     "peak_pct": 2
+    },
+    "stats-worker": {
+     "avg_pct": 1,
+     "peak_pct": 3
+    }
+   }
+  },
+  {
+   "label": "rate_40",
+   "new_runs_per_s": 40,
+   "scheduled_runs": 2400,
+   "elapsed_s": 70.3,
+   "approx_player_sockets": 420,
+   "idle_watchers": 50,
+   "watcher_frames": 95822,
+   "results": {
+    "leaderboard": {
+     "count": 702,
+     "p50Ms": 37.212,
+     "p95Ms": 56.87,
+     "p99Ms": 69.083,
+     "maxMs": 204.594,
+     "errors": 0,
+     "status": {
+      "200": 702
+     }
+    },
+    "live_rank_frame": {
+     "count": 2400,
+     "p50Ms": 50.073,
+     "p95Ms": 85.048,
+     "p99Ms": 105.709,
+     "maxMs": 292.164,
+     "errors": 0
+    },
+    "score": {
+     "count": 2400,
+     "p50Ms": 34.077,
+     "p95Ms": 45.796,
+     "p99Ms": 53.794,
+     "maxMs": 209.37,
+     "errors": 0,
+     "status": {
+      "200": 2400
+     }
+    },
+    "session": {
+     "count": 2400,
+     "p50Ms": 6.253,
+     "p95Ms": 13.936,
+     "p99Ms": 17.102,
+     "maxMs": 62.46,
+     "errors": 0,
+     "status": {
+      "200": 2400
+     }
+    }
+   },
+   "sql_after": {
+    "run_attempts": 2400,
+    "scores": 2400,
+    "outbox_rows": 2400,
+    "outbox_unpublished": 0,
+    "processed_events": 2400,
+    "daily_accepted_sum": 2400
+   },
+   "host_load_avg_before_after": [
+    "10.05 6.44 5.58",
+    "18.71 9.73 6.89"
+   ],
+   "process_cpu": {
+    "gateway": {
+     "avg_pct": 32,
+     "peak_pct": 41
+    },
+    "leaderboard-svc": {
+     "avg_pct": 168,
+     "peak_pct": 219
+    },
+    "load-probe": {
+     "avg_pct": 27,
+     "peak_pct": 35
+    },
+    "outbox-publisher": {
+     "avg_pct": 1,
+     "peak_pct": 2
+    },
+    "score-svc": {
+     "avg_pct": 4,
+     "peak_pct": 6
+    },
+    "session-svc": {
+     "avg_pct": 1,
+     "peak_pct": 2
+    },
+    "stats-worker": {
+     "avg_pct": 3,
+     "peak_pct": 4
+    }
+   }
+  }
+ ],
+ "publish_fix_ab_40_per_s": {
+  "order": "base, fix, base, fix; each on a fresh stack; binaries identical except internal/store/redis.go",
+  "runs": [
+   {
+    "label": "base_rate_40_1",
+    "new_runs_per_s": 40,
+    "scheduled_runs": 2400,
+    "elapsed_s": 70.3,
+    "approx_player_sockets": 420,
+    "idle_watchers": 50,
+    "watcher_frames": 97260,
+    "results": {
+     "leaderboard": {
+      "count": 702,
+      "p50Ms": 37.276,
+      "p95Ms": 51.033,
+      "p99Ms": 60.461,
+      "maxMs": 67.477,
+      "errors": 0,
+      "status": {
+       "200": 702
+      }
+     },
+     "live_rank_frame": {
+      "count": 2400,
+      "p50Ms": 49.861,
+      "p95Ms": 82.538,
+      "p99Ms": 94.63,
+      "maxMs": 164.302,
+      "errors": 0
+     },
+     "score": {
+      "count": 2400,
+      "p50Ms": 33.999,
+      "p95Ms": 44.75,
+      "p99Ms": 49.744,
+      "maxMs": 86.233,
+      "errors": 0,
+      "status": {
+       "200": 2400
+      }
+     },
+     "session": {
+      "count": 2400,
+      "p50Ms": 6.359,
+      "p95Ms": 13.523,
+      "p99Ms": 16.103,
+      "maxMs": 24.181,
+      "errors": 0,
+      "status": {
+       "200": 2400
+      }
+     }
+    },
+    "sql_after": {
+     "run_attempts": 2400,
+     "scores": 2400,
+     "outbox_rows": 2400,
+     "outbox_unpublished": 0,
+     "processed_events": 2400,
+     "daily_accepted_sum": 2400
+    },
+    "host_load_avg_before_after": [
+     "4.74 7.77 6.56",
+     "14.02 9.72 7.37"
+    ],
+    "process_cpu": {
+     "gateway": {
+      "avg_pct": 33,
+      "peak_pct": 41
+     },
+     "leaderboard-svc": {
+      "avg_pct": 173,
+      "peak_pct": 215
+     },
+     "load-probe": {
+      "avg_pct": 28,
+      "peak_pct": 35
+     },
+     "outbox-publisher": {
+      "avg_pct": 1,
+      "peak_pct": 2
+     },
+     "score-svc": {
+      "avg_pct": 4,
+      "peak_pct": 5
+     },
+     "session-svc": {
+      "avg_pct": 1,
+      "peak_pct": 3
+     },
+     "stats-worker": {
+      "avg_pct": 3,
+      "peak_pct": 4
+     }
+    }
+   },
+   {
+    "label": "fix_rate_40_2",
+    "new_runs_per_s": 40,
+    "scheduled_runs": 2400,
+    "elapsed_s": 70.3,
+    "approx_player_sockets": 420,
+    "idle_watchers": 50,
+    "watcher_frames": 103326,
+    "results": {
+     "leaderboard": {
+      "count": 702,
+      "p50Ms": 29.969,
+      "p95Ms": 39.995,
+      "p99Ms": 45.176,
+      "maxMs": 161.323,
+      "errors": 0,
+      "status": {
+       "200": 702
+      }
+     },
+     "live_rank_frame": {
+      "count": 2400,
+      "p50Ms": 39.692,
+      "p95Ms": 65.138,
+      "p99Ms": 74.582,
+      "maxMs": 196.723,
+      "errors": 0
+     },
+     "score": {
+      "count": 2400,
+      "p50Ms": 27.005,
+      "p95Ms": 34.885,
+      "p99Ms": 37.896,
+      "maxMs": 83.393,
+      "errors": 0,
+      "status": {
+       "200": 2400
+      }
+     },
+     "session": {
+      "count": 2400,
+      "p50Ms": 5.493,
+      "p95Ms": 10.555,
+      "p99Ms": 12.359,
+      "maxMs": 30.88,
+      "errors": 0,
+      "status": {
+       "200": 2400
+      }
+     }
+    },
+    "sql_after": {
+     "run_attempts": 2400,
+     "scores": 2400,
+     "outbox_rows": 2400,
+     "outbox_unpublished": 0,
+     "processed_events": 2400,
+     "daily_accepted_sum": 2400
+    },
+    "host_load_avg_before_after": [
+     "11.63 9.41 7.30",
+     "19.03 12.06 8.46"
+    ],
+    "process_cpu": {
+     "gateway": {
+      "avg_pct": 40,
+      "peak_pct": 49
+     },
+     "leaderboard-svc": {
+      "avg_pct": 171,
+      "peak_pct": 211
+     },
+     "load-probe": {
+      "avg_pct": 34,
+      "peak_pct": 42
+     },
+     "outbox-publisher": {
+      "avg_pct": 1,
+      "peak_pct": 2
+     },
+     "score-svc": {
+      "avg_pct": 4,
+      "peak_pct": 6
+     },
+     "session-svc": {
+      "avg_pct": 1,
+      "peak_pct": 3
+     },
+     "stats-worker": {
+      "avg_pct": 3,
+      "peak_pct": 4
+     }
+    }
+   },
+   {
+    "label": "base_rate_40_3",
+    "new_runs_per_s": 40,
+    "scheduled_runs": 2400,
+    "elapsed_s": 70.3,
+    "approx_player_sockets": 420,
+    "idle_watchers": 50,
+    "watcher_frames": 97206,
+    "results": {
+     "leaderboard": {
+      "count": 702,
+      "p50Ms": 37.279,
+      "p95Ms": 56.276,
+      "p99Ms": 69.421,
+      "maxMs": 152.05,
+      "errors": 0,
+      "status": {
+       "200": 702
+      }
+     },
+     "live_rank_frame": {
+      "count": 2400,
+      "p50Ms": 50.075,
+      "p95Ms": 83.516,
+      "p99Ms": 111.046,
+      "maxMs": 300.727,
+      "errors": 0
+     },
+     "score": {
+      "count": 2400,
+      "p50Ms": 34.356,
+      "p95Ms": 45.259,
+      "p99Ms": 56.194,
+      "maxMs": 135.765,
+      "errors": 0,
+      "status": {
+       "200": 2400
+      }
+     },
+     "session": {
+      "count": 2400,
+      "p50Ms": 6.337,
+      "p95Ms": 13.796,
+      "p99Ms": 16.752,
+      "maxMs": 28.399,
+      "errors": 0,
+      "status": {
+       "200": 2400
+      }
+     }
+    },
+    "sql_after": {
+     "run_attempts": 2400,
+     "scores": 2400,
+     "outbox_rows": 2400,
+     "outbox_unpublished": 0,
+     "processed_events": 2400,
+     "daily_accepted_sum": 2400
+    },
+    "host_load_avg_before_after": [
+     "16.09 11.74 8.41",
+     "17.35 13.04 9.16"
+    ],
+    "process_cpu": {
+     "gateway": {
+      "avg_pct": 32,
+      "peak_pct": 40
+     },
+     "leaderboard-svc": {
+      "avg_pct": 169,
+      "peak_pct": 216
+     },
+     "load-probe": {
+      "avg_pct": 28,
+      "peak_pct": 36
+     },
+     "outbox-publisher": {
+      "avg_pct": 1,
+      "peak_pct": 2
+     },
+     "score-svc": {
+      "avg_pct": 4,
+      "peak_pct": 5
+     },
+     "session-svc": {
+      "avg_pct": 1,
+      "peak_pct": 3
+     },
+     "stats-worker": {
+      "avg_pct": 3,
+      "peak_pct": 4
+     }
+    }
+   },
+   {
+    "label": "fix_rate_40_4",
+    "new_runs_per_s": 40,
+    "scheduled_runs": 2400,
+    "elapsed_s": 70.3,
+    "approx_player_sockets": 420,
+    "idle_watchers": 50,
+    "watcher_frames": 107384,
+    "results": {
+     "leaderboard": {
+      "count": 702,
+      "p50Ms": 29.684,
+      "p95Ms": 37.225,
+      "p99Ms": 42.095,
+      "maxMs": 53.553,
+      "errors": 0,
+      "status": {
+       "200": 702
+      }
+     },
+     "live_rank_frame": {
+      "count": 2400,
+      "p50Ms": 40.489,
+      "p95Ms": 63.145,
+      "p99Ms": 72.149,
+      "maxMs": 227.147,
+      "errors": 0
+     },
+     "score": {
+      "count": 2400,
+      "p50Ms": 28.657,
+      "p95Ms": 34.74,
+      "p99Ms": 40.28,
+      "maxMs": 91.508,
+      "errors": 0,
+      "status": {
+       "200": 2400
+      }
+     },
+     "session": {
+      "count": 2400,
+      "p50Ms": 5.954,
+      "p95Ms": 10.657,
+      "p99Ms": 11.988,
+      "maxMs": 17.191,
+      "errors": 0,
+      "status": {
+       "200": 2400
+      }
+     }
+    },
+    "sql_after": {
+     "run_attempts": 2400,
+     "scores": 2400,
+     "outbox_rows": 2400,
+     "outbox_unpublished": 0,
+     "processed_events": 2400,
+     "daily_accepted_sum": 2400
+    },
+    "host_load_avg_before_after": [
+     "14.99 12.67 9.08",
+     "17.54 13.43 9.61"
+    ],
+    "process_cpu": {
+     "gateway": {
+      "avg_pct": 42,
+      "peak_pct": 52
+     },
+     "leaderboard-svc": {
+      "avg_pct": 181,
+      "peak_pct": 232
+     },
+     "load-probe": {
+      "avg_pct": 36,
+      "peak_pct": 45
+     },
+     "outbox-publisher": {
+      "avg_pct": 1,
+      "peak_pct": 2
+     },
+     "score-svc": {
+      "avg_pct": 4,
+      "peak_pct": 5
+     },
+     "session-svc": {
+      "avg_pct": 1,
+      "peak_pct": 2
+     },
+     "stats-worker": {
+      "avg_pct": 3,
+      "peak_pct": 4
+     }
+    }
+   }
+  ]
+ },
+ "limits": [
+  "One machine and loopback networking; the probe shares the CPU with the services. Not a capacity claim for any deployment.",
+  "Rates are new games started per second; each game also holds a socket for about 10.5 s, so 40 a second means roughly 420 player sockets plus 50 watchers.",
+  "The profile steps are single runs; the 40/s A/B has two runs per variant.",
+  "Synthetic players with planned taps; no real devices, browsers or mobile networks.",
+  "The profile did not exceed 40 new runs a second, so the saturation point was not reached; leaderboard-svc CPU was the resource growing fastest."
+ ]
+}

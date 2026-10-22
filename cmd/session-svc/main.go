@@ -19,6 +19,10 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	if httpapi.TrustedProxies, err = httpapi.ParseTrustedProxies(
+		config.Env("MINIPLAY_TRUSTED_PROXIES", "127.0.0.0/8,::1/128")); err != nil {
+		log.Fatal(err)
+	}
 	cache, err := store.OpenRedis(context.Background(), config.Env("REDIS_URL", "redis://127.0.0.1:6379/0"))
 	if err != nil {
 		log.Fatal(err)

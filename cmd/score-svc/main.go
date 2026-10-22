@@ -20,6 +20,10 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	if httpapi.TrustedProxies, err = httpapi.ParseTrustedProxies(
+		config.Env("MINIPLAY_TRUSTED_PROXIES", "127.0.0.0/8,::1/128")); err != nil {
+		log.Fatal(err)
+	}
 	url, err := config.Required("DATABASE_URL")
 	if err != nil {
 		log.Fatal(err)

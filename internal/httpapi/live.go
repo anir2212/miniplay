@@ -52,21 +52,10 @@ func LiveHandler(db BoardStore, cache LiveCache, now func() time.Time) http.Hand
 			return
 		}
 		defer closeSub()
-		exists, err := cache.HasBoard(r.Context(), key)
+		initial, err := completeBoard(r.Context(), db, cache, id, key, since, user)
 		if err != nil {
 			failure(w, 503, "live board unavailable")
 			return
-		}
-		if !exists {
-			rows, dbErr := db.BestScores(r.Context(), id, since)
-			if dbErr != nil {
-				failure(w, 503, "live board unavailable")
-				return
-			}
-			if err = cache.Backfill(r.Context(), key, rows); err != nil {
-				failure(w, 503, "live board unavailable")
-				return
-			}
 		}
 		conn, err := websocket.Accept(w, r, nil)
 		if err != nil {
@@ -74,17 +63,23 @@ func LiveHandler(db BoardStore, cache LiveCache, now func() time.Time) http.Hand
 		}
 		defer conn.CloseNow()
 		ctx := conn.CloseRead(r.Context())
-		send := func() error {
-			board, err := cache.Board(ctx, key, user)
-			if err != nil {
-				return err
-			}
+		write := func(board store.Board) error {
 			payload, _ := json.Marshal(liveMessage{Type: "board", Game: id, Period: period, Board: board})
 			writeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 			defer cancel()
 			return conn.Write(writeCtx, websocket.MessageText, payload)
 		}
-		if err = send(); err != nil {
+		// An update after Redis key loss recreates a sorted set holding only
+		// the new score and clears the completeness marker. Re-check on every
+		// notification so a live frame is never a partial board.
+		send := func() error {
+			board, err := completeBoard(ctx, db, cache, id, key, since, user)
+			if err != nil {
+				return err
+			}
+			return write(board)
+		}
+		if err = write(initial); err != nil {
 			return
 		}
 		heartbeat := time.NewTicker(25 * time.Second)

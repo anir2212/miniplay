@@ -2,7 +2,6 @@ package httpapi
 
 import (
 	"context"
-	"net"
 	"net/http"
 
 	"miniplay/internal/game"
@@ -25,10 +24,7 @@ func SessionHandler(signer *token.Signer, limiter Limiter) http.Handler {
 			failure(w, 400, err.Error())
 			return
 		}
-		ip, _, err := net.SplitHostPort(r.RemoteAddr)
-		if err != nil {
-			ip = r.RemoteAddr
-		}
+		ip := clientIP(r)
 		allowed, err := limiter.Allow(r.Context(), "session-ip:"+ip, 30, 0.5)
 		if err != nil {
 			failure(w, 503, "rate limiter unavailable")

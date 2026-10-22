@@ -52,33 +52,43 @@ func LeaderboardHandler(db BoardStore, cache BoardCache, now func() time.Time) h
 			failure(w, 400, "invalid game or period")
 			return
 		}
-		exists, cacheErr := cache.HasBoard(r.Context(), key)
-		if cacheErr == nil && !exists {
-			rows, dbErr := db.BestScores(r.Context(), id, since)
-			if dbErr == nil {
-				cacheErr = cache.Backfill(r.Context(), key, rows)
-			} else {
-				// The Redis key may contain only a recent score. Never read it
-				// as a complete board when SQL backfill could not finish.
-				cacheErr = dbErr
-			}
-		}
-		if cacheErr == nil {
-			result, err := cache.Board(r.Context(), key, user)
-			if err == nil {
-				respond(w, 200, result)
-				return
-			}
-		}
-		// Redis is a cache. SQL gives a correct answer during cache outages.
-		rows, err := db.Leaderboard(r.Context(), id, since, "", 0)
+		result, err := completeBoard(r.Context(), db, cache, id, key, since, user)
 		if err != nil {
 			failure(w, 503, "leaderboard unavailable")
 			return
 		}
-		respond(w, 200, fromSQL(rows, user))
+		respond(w, 200, result)
 	})
 	return mux
+}
+
+// completeBoard is shared by the REST and live board routes. It reads Redis
+// only when the SQL backfill marker says the sorted set is complete, backfills
+// a partial or missing key first, and otherwise answers from SQL.
+func completeBoard(ctx context.Context, db BoardStore, cache BoardCache, id game.ID, key string, since time.Time, user string) (store.Board, error) {
+	exists, cacheErr := cache.HasBoard(ctx, key)
+	if cacheErr == nil && !exists {
+		rows, dbErr := db.BestScores(ctx, id, since)
+		if dbErr == nil {
+			cacheErr = cache.Backfill(ctx, key, rows)
+		} else {
+			// The Redis key may contain only a recent score. Never read it
+			// as a complete board when SQL backfill could not finish.
+			cacheErr = dbErr
+		}
+	}
+	if cacheErr == nil {
+		result, err := cache.Board(ctx, key, user)
+		if err == nil {
+			return result, nil
+		}
+	}
+	// Redis is a cache. SQL gives a correct answer during cache outages.
+	rows, err := db.Leaderboard(ctx, id, since, "", 0)
+	if err != nil {
+		return store.Board{}, err
+	}
+	return fromSQL(rows, user), nil
 }
 
 func fromSQL(rows []store.Score, user string) store.Board {

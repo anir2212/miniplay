@@ -20,12 +20,14 @@ const updateBoardScript = `
 if redis.call('EXISTS', KEYS[1]) == 0 then
   redis.call('DEL', KEYS[2])
 end
-redis.call('ZADD', KEYS[1], 'GT', ARGV[1], ARGV[2])
+local changed = redis.call('ZADD', KEYS[1], 'GT', 'CH', ARGV[1], ARGV[2])
 if tonumber(ARGV[3]) > 0 then
   redis.call('EXPIRE', KEYS[1], ARGV[3])
 end
-redis.call('PUBLISH', KEYS[3], ARGV[4])
-return 1
+if changed > 0 then
+  redis.call('PUBLISH', KEYS[3], ARGV[4])
+end
+return changed
 `
 
 const backfillBoardScript = `
@@ -111,7 +113,9 @@ func (r *Redis) UpdateBoards(ctx context.Context, row Score) error {
 		}
 		payload, _ := json.Marshal(map[string]any{"user": row.User, "score": row.Score, "game": row.Game, "period": period})
 		// Key creation, marker invalidation, ZADD GT, and publication are
-		// atomic. A retry cannot lower a user's best score.
+		// atomic. A retry cannot lower a user's best score. Only a change is
+		// published: the stats worker re-applies every accepted score, and each
+		// notification makes every live socket on the board rebuild a frame.
 		if err = r.Client.Eval(ctx, updateBoardScript, []string{key, boardMarker(key), "updates:" + key}, row.Score, row.User, boardTTL(key), string(payload)).Err(); err != nil {
 			return err
 		}
