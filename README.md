@@ -15,7 +15,8 @@ The server can reject a score that does not match the submitted taps. It cannot 
   - every accepted score woke each live socket twice.
 
   See the [evidence](evidence/load_profile_2026-10-22.json). It is one machine with synthetic players, not a capacity claim.
-- **Android emulator.** A debug build of the Flutter host played one tapped game on an Android 14 emulator. The score reached the database and the live board, the host received the page's bridge messages, and the app's board updated by itself when other players scored ([evidence](evidence/android_emulator_2026-10-22.json)). A physical phone is still unverified.
+- **Android emulator.** A debug build of the Flutter host played one tapped game on an Android 14 emulator. The score reached the database and the live board, the host received the page's bridge messages, and the app's board updated by itself when other players scored ([evidence](evidence/android_emulator_2026-10-22.json)).
+- **Physical phone.** On a Samsung Galaxy S23 (Android 16) connected by USB, a person played both games in the Flutter host (130 and 15 points). Both were accepted in the database, and the phone's leaderboard updated live when another player scored ([evidence](evidence/phone_session_2026-10-22.json)). It was a debug build reaching the Mac through `adb reverse`, not a mobile network or a release build.
 - The offline synthetic abuse evaluation found 22 injected bots, falsely flagged 1 clean run, and missed 58 bots: precision 0.9565 and recall 0.275 on that designed holdout. It is not a real-player accuracy estimate.
 
 [RESULTS.md](RESULTS.md) gives the dates, commands and exact boundaries for these checks.
@@ -40,4 +41,4 @@ The [OpenAPI contract](api/openapi.yaml) describes the gateway. The Flutter app 
 
 ## Scope
 
-User IDs are demo identities. Next: push the load profile past 40 games a second to find where the live board stops keeping up, and play on a physical phone. Authentication, TLS and real-player abuse labels are still open. Plain HTTP works only in debug builds of the Flutter host. This is a local prototype, not a public gaming service.
+User IDs are demo identities. Next: push the load profile past 40 games a second to find where the live board stops keeping up, and build a release version over HTTPS. Authentication, TLS and real-player abuse labels are still open. Plain HTTP works only in debug builds of the Flutter host. This is a local prototype, not a public gaming service.

@@ -24,6 +24,18 @@ Results below were collected locally on 2026-10-12, 2026-10-13, 2026-10-15, 2026
 | Incomplete-board fallback | Two focused handler cases passed: failed backfill falls back to a complete SQL answer; when SQL also fails, returns 503 without reading the partial Redis board | `go test ./internal/httpapi -run TestLeaderboardBackfillFailureDoesNotServePartialCache -count=1 -v` (2026-10-16); fake dependencies |
 | OpenAPI document structure | Parsed five public paths and resolved all 43 local `$ref` targets | Ruby YAML parser and local-reference walk on `api/openapi.yaml` (2026-10-16); no live contract test |
 
+## Physical-phone session, 22 October 2026 (afternoon)
+
+The same debug Flutter host ran on a **Samsung Galaxy S23 (SM-S911B), Android 16, WebView 155**, connected by USB. `adb reverse tcp:18080` let the phone's `127.0.0.1:18080` reach the Mac's gateway, so no Wi-Fi or public network was involved. The APK was built with `MINIPLAY_URL=http://127.0.0.1:18080` and demo user `phone1`, against the same kind of disposable stack. Evidence: [`evidence/phone_session_2026-10-22.json`](evidence/phone_session_2026-10-22.json).
+
+- **Pulse Field.** The project owner played with their own taps. The page showed "Finished rhythm: 130 points", and the host's status bar showed "rhythm: 130 points · taps: 39".
+- **Comet Catch.** They then switched games and scored 15 from 12 taps.
+- **SQL** recorded both as accepted scores for `phone1` (130 in 10,007 ms; 15 in 10,009 ms), with their outbox events published and processed.
+- **Live board.** With the app idle on the Comet Catch board, `cmd/e2e-probe` scored another player at 90 from the Mac (200, then 409 for the replay). The phone's leaderboard showed it above `phone1` without any input except a scroll.
+- **Final SQL:** 4 accepted attempts (2 from the phone, 2 scripted from the Mac), all published and processed, with a daily count of 4.
+
+Screenshots were not kept, because they showed a messaging app's chat-head overlay with a personal photo. Limits: one phone over USB to the Mac's loopback, a debug build over plain HTTP, and a demo identity.
+
 ## Android emulator session, 22 October 2026 (afternoon)
 
 The Flutter host was built as a debug APK with `MINIPLAY_URL=http://10.0.2.2:18080` and demo user `droid1` (Flutter 3.44.1, Gradle 9.1.0). It ran on a headless Android 14 (API 34) Pixel 6 emulator with WebView 113. The stack was the disposable one used for the load profile, with the gateway serving a fresh `web/dist`. Evidence: [`evidence/android_emulator_2026-10-22.json`](evidence/android_emulator_2026-10-22.json), with two screenshots.
@@ -84,7 +96,7 @@ This is one functional run on one machine with demo users. It is not a load or l
 
 ## Pending evidence
 
-- A physical-phone run. (An Android emulator run with injected taps passed on 22 October, below.)
+- A release build over HTTPS on a real network. (An emulator run and a USB-connected physical-phone run, both debug builds, passed on 22 October; see above.)
 - Database-backed cheat injection evaluation (abuse checks so far are request-level).
 - The 22 October combined run covered integration, worker restart, Redis loss and dead letters once; it is not repeated under load.
 - k6 concurrency and latency measurements with hardware specs; pprof before/after.
