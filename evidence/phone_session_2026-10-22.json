@@ -1,0 +1,28 @@
+{
+ "what": "First physical-phone session: a person played both games in the Flutter host on a Samsung Galaxy S23 through the local stack",
+ "date": "2026-10-22",
+ "device": {
+  "model": "Samsung Galaxy S23 (SM-S911B)",
+  "android": "16",
+  "webview": "Android System WebView 155.0.8059.43",
+  "connection": "USB, with adb reverse tcp:18080 so the phone's 127.0.0.1:18080 reached the Mac's gateway; no Wi-Fi or public network"
+ },
+ "app": {
+  "build": "flutter build apk --debug --dart-define=MINIPLAY_URL=http://127.0.0.1:18080 --dart-define=MINIPLAY_USER=phone1 (Flutter 3.44.1)",
+  "note": "Debug build; plain HTTP works only because Flutter's Gradle plugin adds usesCleartextTraffic to debug builds."
+ },
+ "stack": "The disposable stack used for the load profile: PostgreSQL 18.6 on 127.0.0.1:55432, Redis 7.4.11 and Kafka 3.9.1 containers, the six Go services, the gateway on 127.0.0.1:18080 serving a fresh web/dist, and a new per-run secret that was not recorded.",
+ "observations": [
+  "The project owner played Pulse Field with their own taps: the page showed 'Finished rhythm: 130 points' and the Flutter host's status bar showed 'rhythm: 130 points \u00b7 taps: 39', so the bridge messages passed the host's parser.",
+  "They then switched to Comet Catch and played again: 'Finished reflex: 15 points', 12 taps.",
+  "SQL recorded both as accepted scores for phone1 (rhythm 130 in 10,007 ms; reflex 15 in 10,009 ms), with their outbox events published and processed.",
+  "With the app idle on the Comet Catch board, a second player scored 90 from the Mac through cmd/e2e-probe (200, then 409 for the replay; its own frame 6 ms after submission). The phone's in-app leaderboard updated to show it above phone1 with no input other than a scroll.",
+  "Final SQL: 4 accepted attempts (two from the phone, two scripted from the Mac), 4 scores, all outbox events published and processed, daily accepted 4."
+ ],
+ "screenshots": "Not kept: the phone's screenshots showed a messaging app's chat-head overlay with a personal photo.",
+ "limits": [
+  "One phone over USB to the Mac's loopback, not a mobile network.",
+  "Debug build over plain HTTP; no release build or HTTPS.",
+  "Demo user ID supplied by the host; no authenticated identity."
+ ]
+}
