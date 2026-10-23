@@ -9,7 +9,8 @@
   "build": "flutter build apk --debug with --dart-define=MINIPLAY_URL=http://10.0.2.2:18080 and MINIPLAY_USER=droid1",
   "flutter": "3.44.1 stable",
   "gradle": "9.1.0 wrapper; the first build installed NDK 28.2.13676358 into the local Android SDK and took 237 s",
-  "cleartext": "The merged debug manifest has usesCleartextTraffic=true (added by Flutter's Gradle plugin for debug builds only); the app's own manifests do not allow cleartext, so a release build still needs HTTPS."
+  "cleartext": "The merged debug manifest has usesCleartextTraffic=true (added by Flutter's Gradle plugin for debug builds only); the app's own manifests do not allow cleartext, so a release build still needs HTTPS.",
+  "cleartext_correction": "Corrected 2026-10-23: usesCleartextTraffic=true came from the app's own main manifest, where it had been since M1; Flutter's Gradle plugin does not add it. Release builds therefore also allowed cleartext until 2026-10-23, when the attribute was replaced by a network security config that allows cleartext in debug builds only (see evidence/android_release_https_2026-10-24.json)."
  },
  "stack": "Same disposable stack as the load profile: PostgreSQL 18.6 on 127.0.0.1:55432, Redis 7.4.11 and Kafka 3.9.1 containers, the six Go services, gateway on 127.0.0.1:18080 serving the freshly built web/dist; the emulator reaches the Mac's loopback as 10.0.2.2. A new per-run secret was used and not recorded.",
  "steps_and_observations": [

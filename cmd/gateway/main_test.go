@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"io"
 	"net"
@@ -16,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coder/websocket"
 	"miniplay/internal/game"
 	"miniplay/internal/httpapi"
 	"miniplay/internal/store"
@@ -195,5 +197,48 @@ func TestGatewayReusesUpstreamConnectionsUnderConcurrency(t *testing.T) {
 	// about 44 in this test; each discarded one sits in TIME_WAIT.
 	if got := countUpstreamConnections(t, upstreamTransport()); got > 20 {
 		t.Fatalf("upstream accepted %d connections for 3 rounds of 16 concurrent requests; want at most 20", got)
+	}
+}
+
+func TestGatewayCarriesSameOriginWebSocketOverTLS(t *testing.T) {
+	// The release app loads the page over https and opens wss to the same
+	// origin. The proxy keeps the browser's Host header, so the leaderboard
+	// service's same-origin check still compares the page origin with it.
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.CloseNow()
+		_ = conn.Write(r.Context(), websocket.MessageText, []byte("board"))
+		_ = conn.Close(websocket.StatusNormalClosure, "")
+	}))
+	defer upstream.Close()
+	gateway := httptest.NewUnstartedServer(newHandler(http.NotFoundHandler(), http.NotFoundHandler(), proxy(upstream.URL, upstreamTransport()), t.TempDir()))
+	gateway.EnableHTTP2 = true
+	gateway.StartTLS()
+	defer gateway.Close()
+	roots := gateway.Client().Transport.(*http.Transport).TLSClientConfig.RootCAs
+	host := strings.TrimPrefix(gateway.URL, "https://")
+	dial := func(origin string) (*websocket.Conn, *http.Response, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		client := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: roots}}}
+		return websocket.Dial(ctx, "wss://"+host+"/api/boards/live?game=rhythm", &websocket.DialOptions{
+			HTTPClient: client, HTTPHeader: http.Header{"Origin": {origin}},
+		})
+	}
+	conn, _, err := dial("https://" + host)
+	if err != nil {
+		t.Fatalf("same-origin wss through the gateway: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if _, payload, err := conn.Read(ctx); err != nil || string(payload) != "board" {
+		t.Fatalf("read %q, %v", payload, err)
+	}
+	conn.CloseNow()
+	if _, resp, err := dial("https://other.example"); err == nil || resp == nil || resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("cross-origin wss: err=%v resp=%v, want 403", err, resp)
 	}
 }
