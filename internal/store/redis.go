@@ -221,3 +221,32 @@ func (r *Redis) Allow(ctx context.Context, key string, capacity int, refillPerSe
 	allowed, err := r.Client.Eval(ctx, tokenBucket, []string{"rate:" + key}, capacity, refillPerSecond, float64(time.Now().UnixMilli())/1000, 120).Int()
 	return allowed == 1, err
 }
+
+// Ranks returns one-based ranks for the users on the board in one pipelined
+// round trip. The live broadcaster uses it to give every watching player
+// their own rank after a change without one request per socket.
+func (r *Redis) Ranks(ctx context.Context, key string, users []string) (map[string]int64, error) {
+	ranks := make(map[string]int64, len(users))
+	if len(users) == 0 {
+		return ranks, nil
+	}
+	pipe := r.Client.Pipeline()
+	commands := make([]*redis.IntCmd, len(users))
+	for i, user := range users {
+		commands[i] = pipe.ZRevRank(ctx, key, user)
+	}
+	if _, err := pipe.Exec(ctx); err != nil && err != redis.Nil {
+		return nil, err
+	}
+	for i, command := range commands {
+		rank, err := command.Result()
+		if err == redis.Nil {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		ranks[users[i]] = rank + 1
+	}
+	return ranks, nil
+}

@@ -173,3 +173,45 @@ collect:
 		t.Fatalf("published %d updates for new, replay, lower, higher; want 2", got)
 	}
 }
+
+// Ranks answers many players in one round trip and leaves out players who
+// are not on the board. Same opt-in rules as the tests above.
+func TestRedisRanksIntegration(t *testing.T) {
+	url := os.Getenv("MINIPLAY_TEST_REDIS_URL")
+	if url == "" {
+		t.Skip("set MINIPLAY_TEST_REDIS_URL to a disposable loopback Redis database 15")
+	}
+	opts, err := redis.ParseURL(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host, _, err := net.SplitHostPort(opts.Addr)
+	ip := net.ParseIP(host)
+	if err != nil || opts.DB != 15 || (host != "localhost" && (ip == nil || !ip.IsLoopback())) {
+		t.Fatal("integration test requires a loopback Redis URL selecting database 15")
+	}
+	ctx := context.Background()
+	cache, err := OpenRedis(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cache.Client.Close()
+	key := "board:rhythm:ranks-test"
+	if count, err := cache.Client.Exists(ctx, key).Result(); err != nil || count != 0 {
+		t.Fatalf("test key already exists (count=%d, err=%v); use an empty disposable Redis DB 15", count, err)
+	}
+	defer func() { _ = cache.Client.Del(context.Background(), key).Err() }()
+	if err := cache.Client.ZAdd(ctx, key, redis.Z{Score: 30, Member: "amy"}, redis.Z{Score: 50, Member: "ben"}, redis.Z{Score: 40, Member: "cy"}).Err(); err != nil {
+		t.Fatal(err)
+	}
+	ranks, err := cache.Ranks(ctx, key, []string{"amy", "ben", "nobody", "cy"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ranks) != 3 || ranks["ben"] != 1 || ranks["cy"] != 2 || ranks["amy"] != 3 {
+		t.Fatalf("ranks = %v", ranks)
+	}
+	if empty, err := cache.Ranks(ctx, key, nil); err != nil || len(empty) != 0 {
+		t.Fatalf("no users gave %v, %v", empty, err)
+	}
+}

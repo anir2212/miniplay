@@ -15,6 +15,9 @@ import (
 type LiveCache interface {
 	BoardCache
 	SubscribeBoard(context.Context, string) (<-chan struct{}, func(), error)
+	// Ranks returns one-based ranks for the given users that are on the
+	// board; users not on it are left out.
+	Ranks(context.Context, string, []string) (map[string]int64, error)
 }
 
 type liveMessage struct {
@@ -24,7 +27,10 @@ type liveMessage struct {
 	Board  store.Board  `json:"board"`
 }
 
+// LiveHandler streams a board over a WebSocket: an initial frame, then a new
+// frame after every change. Sockets on the same board share one broadcaster.
 func LiveHandler(db BoardStore, cache LiveCache, now func() time.Time) http.Handler {
+	hubs := newBroadcaster(db, cache)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			failure(w, 405, "method not allowed")
@@ -45,13 +51,14 @@ func LiveHandler(db BoardStore, cache LiveCache, now func() time.Time) http.Hand
 			failure(w, 400, "invalid game or period")
 			return
 		}
-		// Subscribe first; backfill and the initial snapshot then have no gap.
-		updates, closeSub, err := cache.SubscribeBoard(r.Context(), key)
+		// Join the board's broadcaster first; the initial snapshot then has no
+		// gap before the first update.
+		hub, member, err := hubs.join(id, period, key, since, user)
 		if err != nil {
 			failure(w, 503, "live board unavailable")
 			return
 		}
-		defer closeSub()
+		defer hubs.leave(hub, member)
 		initial, err := completeBoard(r.Context(), db, cache, id, key, since, user)
 		if err != nil {
 			failure(w, 503, "live board unavailable")
@@ -63,23 +70,15 @@ func LiveHandler(db BoardStore, cache LiveCache, now func() time.Time) http.Hand
 		}
 		defer conn.CloseNow()
 		ctx := conn.CloseRead(r.Context())
-		write := func(board store.Board) error {
-			payload, _ := json.Marshal(liveMessage{Type: "board", Game: id, Period: period, Board: board})
+		write := func(payload []byte) error {
 			writeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 			defer cancel()
 			return conn.Write(writeCtx, websocket.MessageText, payload)
 		}
-		// An update after Redis key loss recreates a sorted set holding only
-		// the new score and clears the completeness marker. Re-check on every
-		// notification so a live frame is never a partial board.
-		send := func() error {
-			board, err := completeBoard(ctx, db, cache, id, key, since, user)
-			if err != nil {
-				return err
-			}
-			return write(board)
-		}
-		if err = write(initial); err != nil {
+		// Each frame the hub builds re-checks the completeness marker, so a
+		// frame after Redis key loss is never a partial board.
+		payload, _ := json.Marshal(liveMessage{Type: "board", Game: id, Period: period, Board: initial})
+		if err = write(payload); err != nil {
 			return
 		}
 		heartbeat := time.NewTicker(25 * time.Second)
@@ -88,11 +87,10 @@ func LiveHandler(db BoardStore, cache LiveCache, now func() time.Time) http.Hand
 			select {
 			case <-ctx.Done():
 				return
-			case _, ok := <-updates:
-				if !ok {
-					return
-				}
-				if err = send(); err != nil {
+			case <-member.gone:
+				return
+			case payload := <-member.frames:
+				if err = write(payload); err != nil {
 					return
 				}
 			case <-heartbeat.C:

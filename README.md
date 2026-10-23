@@ -15,6 +15,11 @@ The server can reject a score that does not match the submitted taps. It cannot 
   - every accepted score woke each live socket twice.
 
   See the [evidence](evidence/load_profile_2026-10-22.json). It is one machine with synthetic players, not a capacity claim.
+- **Live-board saturation, 22–23 October.** Pushed past 40 new games a second, the old code slowed sharply between 40 and 80 and failed games from 120. Every live socket rebuilt its own frame from Redis after each change, and every socket and proxied request used up local ports. Two fixes followed:
+  - one broadcaster per board, which reads each change once and pushes it to every socket on that board;
+  - a pooled gateway transport.
+
+  At 80 a second the rank frame's p99 fell from 372–400 ms to 68–87 ms across two alternating A/Bs. With both fixes, every game was accepted up to 160 a second (p99 172–204 ms). From 200 a second the single test machine runs out of local ports, not CPU ([evidence](evidence/load_saturation_2026-10-22.json)).
 - **Android emulator.** A debug build of the Flutter host played one tapped game on an Android 14 emulator. The score reached the database and the live board, the host received the page's bridge messages, and the app's board updated by itself when other players scored ([evidence](evidence/android_emulator_2026-10-22.json)).
 - **Physical phone.** On a Samsung Galaxy S23 (Android 16) connected by USB, a person played both games in the Flutter host (130 and 15 points). Both were accepted in the database, and the phone's leaderboard updated live when another player scored ([evidence](evidence/phone_session_2026-10-22.json)). It was a debug build reaching the Mac through `adb reverse`, not a mobile network or a release build.
 - The offline synthetic abuse evaluation found 22 injected bots, falsely flagged 1 clean run, and missed 58 bots: precision 0.9565 and recall 0.275 on that designed holdout. It is not a real-player accuracy estimate.
