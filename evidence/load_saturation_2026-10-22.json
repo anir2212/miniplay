@@ -1,0 +1,3811 @@
+{
+ "what": "MiniPlay live-board saturation search beyond 40 new games a second, two fixes (a per-board live broadcaster and a pooled gateway upstream transport), and A/B checks",
+ "dates": "steps, profiles and the first two A/Bs on 2026-10-22 (evening, SGT); a repeat A/B of base against the final code on 2026-10-23 (morning)",
+ "hardware": "Apple M3 Pro (11 cores), 18 GiB memory, macOS 15.3.1; services and the probe ran natively, Redis and Kafka in Docker Desktop 29.5.3 (its VM and port-forwarding backend are on the same machine)",
+ "shared_machine_note": "Other projects' agents shared the laptop; host load averages are recorded per run. Every measured run held the workspace's shared CPU lock.",
+ "versions": {
+  "go": "1.27.2 (project .toolchain); binaries built with -trimpath -buildvcs=false",
+  "postgresql": "18.6 (Homebrew binaries), a new disposable cluster per run on 127.0.0.1:55432, TCP only, max_connections=200",
+  "redis": "redis:7.4-alpine (7.4.11), new container per run on 127.0.0.1:16379",
+  "kafka": "apache/kafka:3.9.1 single-node KRaft, new container per run on 127.0.0.1:19092, topics score.events and score.deadletter with 3 partitions"
+ },
+ "variants": {
+  "base": "the previous version (each live socket has its own Redis subscription and rebuilds its own frame; gateway proxies use http.DefaultTransport)",
+  "broadcaster": "base plus internal/httpapi/broadcast.go, the live.go and leaderboards.go changes, and store.Redis.Ranks; the gateway binary is byte-identical to base",
+  "broadcaster+gateway_pool": "broadcaster plus cmd/gateway upstreamTransport (MaxIdleConnsPerHost 256); every other binary is byte-identical to broadcaster",
+  "note": "load-probe was the same binary in every run (it adds a start_lag measurement to the committed probe)"
+ },
+ "stack": "migrate, session-svc :18081, score-svc :18082, leaderboard-svc :18083, gateway :18080 serving web/dist, outbox-publisher and stats-worker; a new per-run HMAC secret from openssl rand that was never written down",
+ "probe": {
+  "command": "load-probe -gateway http://127.0.0.1:18080 -rate R -duration 60s -watchers 50 -board-rate 10 -prefix <per run>",
+  "per_run": "open the player's live socket on the all-time Pulse Field board, POST /api/sessions, wait 10.2 s, POST /api/scores with 12 replayed hits, time from submission to the first frame carrying the player's rank (frame timeout 15 s, HTTP client timeout 10 s)",
+  "clients": "each run has its own user and its own synthetic address from 198.18.0.0/15 in X-Forwarded-For",
+  "start_lag": "how late each scheduled start was; p99 stayed at or under about 10 ms in every run, so the probe kept its schedule"
+ },
+ "measurement": {
+  "cpu": "process_cpu_pct avg is cumulative CPU time over the probe's lifetime divided by wall time; peak_2s is the largest 2-second interval. 100% is one core of 11.",
+  "docker": "docker_desktop_backend is com.docker.backend (it forwards published ports into the VM); docker_vm is the Virtualization.framework process running Redis and Kafka",
+  "redis": "CONFIG RESETSTAT before the probe; commandstats after (Lua-internal calls are counted too); INFO clients 40 s into the probe; SLOWLOG threshold 1 ms (the log holds at most 128 entries)",
+  "tcp": "netstat 40 s into the probe, counted by the service port at either end; macOS ephemeral ports are 49152-65535 (16,384) and TIME_WAIT lasts 30 s",
+  "sql": "after the outbox drained: run_attempts, scores, rejections, outbox rows, unpublished, processed events and the daily accepted sum"
+ },
+ "findings": {
+  "base_saturation": "Rank-frame latency rose sharply between 40 and 80 new games a second (p50 42 -> 143 ms) with no errors; from 120 a second requests failed with 'connect: can't assign requested address'.",
+  "base_cause": "Every live socket rebuilt its own frame after every change (three Redis round trips per socket per change) and held its own Redis subscription, all through Docker Desktop's port forwarding; Redis throughput fell as load rose. Each socket also cost three loopback connections, and closed connections hold ports for 30 s.",
+  "fix_1_broadcaster": "One hub per board per process: one subscription, one completeness check and top-20 read and one pipelined rank lookup per change; slow sockets keep only the newest frame.",
+  "fix_2_gateway_pool": "The gateway's reverse proxies used http.DefaultTransport (2 idle connections per host), so most proxied requests opened and discarded a connection; a shared transport keeps 256 per service.",
+  "after_fixes": "Every game accepted through 160 new games a second (about 1,700 player sockets plus 50 watchers), rank-frame p99 172-204 ms. From 200 a second the one-host test runs out of ephemeral ports (each game holds two loopback connections plus 30 s TIME_WAIT) while measured processes use about 3.5 of 11 cores.",
+  "next_code_limit": "Each board's hub builds frames serially and a build grows with watching players; changes per watcher frame rose from about 1 at 40 a second to 5.5 at 160."
+ },
+ "smoke_run_not_reported": "a short 8-second run at 5 a second checked the scripts before the profile (40 games, all accepted)",
+ "base_profile_2026_10_22": [
+  {
+   "label": "base40",
+   "variant": "base",
+   "new_runs_per_s": 40,
+   "started_local": "18:33:46",
+   "scheduled_runs": 2400,
+   "accepted_scores": 2400,
+   "elapsed_s": 70.3,
+   "results": {
+    "leaderboard": {
+     "count": 702,
+     "p50Ms": 31.207,
+     "p95Ms": 52.382,
+     "p99Ms": 155.603,
+     "maxMs": 467.12,
+     "status": {
+      "200": 702
+     },
+     "errors": 0
+    },
+    "live_rank_frame": {
+     "count": 2400,
+     "p50Ms": 42.222,
+     "p95Ms": 80.153,
+     "p99Ms": 226.803,
+     "maxMs": 602.862,
+     "errors": 0
+    },
+    "score": {
+     "count": 2400,
+     "p50Ms": 26.806,
+     "p95Ms": 45.048,
+     "p99Ms": 134.244,
+     "maxMs": 400.034,
+     "status": {
+      "200": 2400
+     },
+     "errors": 0
+    },
+    "session": {
+     "count": 2400,
+     "p50Ms": 4.892,
+     "p95Ms": 11.245,
+     "p99Ms": 19.563,
+     "maxMs": 223.2,
+     "status": {
+      "200": 2400
+     },
+     "errors": 0
+    },
+    "start_lag": {
+     "count": 2400,
+     "p50Ms": 0.155,
+     "p95Ms": 1.082,
+     "p99Ms": 2.421,
+     "maxMs": 53.131,
+     "errors": 0
+    }
+   },
+   "sql_after": {
+    "run_attempts": 2400,
+    "scores": 2400,
+    "rejections": 0,
+    "outbox_rows": 2400,
+    "outbox_unpublished": 0,
+    "processed_events": 2400,
+    "daily_accepted_sum": 2400
+   },
+   "redis_board_members_after": 2400,
+   "watcher_frames": 92123,
+   "process_cpu_pct": {
+    "session-svc": {
+     "avg_pct": 1,
+     "peak_2s_pct": 2
+    },
+    "score-svc": {
+     "avg_pct": 4,
+     "peak_2s_pct": 6
+    },
+    "leaderboard-svc": {
+     "avg_pct": 155,
+     "peak_2s_pct": 209
+    },
+    "gateway": {
+     "avg_pct": 34,
+     "peak_2s_pct": 46
+    },
+    "outbox-publisher": {
+     "avg_pct": 1,
+     "peak_2s_pct": 1
+    },
+    "stats-worker": {
+     "avg_pct": 3,
+     "peak_2s_pct": 5
+    },
+    "load-probe": {
+     "avg_pct": 31,
+     "peak_2s_pct": 41
+    },
+    "docker_desktop_backend": {
+     "avg_pct": 177,
+     "peak_2s_pct": 232
+    },
+    "docker_vm": {
+     "avg_pct": 223,
+     "peak_2s_pct": 279
+    }
+   },
+   "container_cpu_pct_docker_stats": {
+    "p11sat-redis": {
+     "avg_pct": 41,
+     "peak_pct": 71,
+     "samples": 16
+    },
+    "p11sat-kafka": {
+     "avg_pct": 18,
+     "peak_pct": 60,
+     "samples": 16
+    }
+   },
+   "redis_commands_total": 2904027,
+   "redis_connected_clients_mid": 597,
+   "redis_pubsub_clients_mid": 462,
+   "redis_slowlog_entries_over_1ms": 128,
+   "gateway_proxy_errors": {},
+   "host_tcp_mid": {
+    "ESTABLISHED": 3230,
+    "TIME_WAIT": 3538
+   },
+   "host_load_avg_first_last": [
+    "{ 3.82 5.20 4.81 }",
+    "{ 17.98 9.04 6.28 }"
+   ]
+  },
+  {
+   "label": "base80",
+   "variant": "base",
+   "new_runs_per_s": 80,
+   "started_local": "18:35:13",
+   "scheduled_runs": 4800,
+   "accepted_scores": 4800,
+   "elapsed_s": 70.4,
+   "results": {
+    "leaderboard": {
+     "count": 703,
+     "p50Ms": 119.048,
+     "p95Ms": 256.288,
+     "p99Ms": 350.008,
+     "maxMs": 455.651,
+     "status": {
+      "200": 703
+     },
+     "errors": 0
+    },
+    "live_rank_frame": {
+     "count": 4800,
+     "p50Ms": 142.649,
+     "p95Ms": 311.164,
+     "p99Ms": 447.387,
+     "maxMs": 647.168,
+     "errors": 0
+    },
+    "score": {
+     "count": 4800,
+     "p50Ms": 68.088,
+     "p95Ms": 136.921,
+     "p99Ms": 215.119,
+     "maxMs": 300.304,
+     "status": {
+      "200": 4800
+     },
+     "errors": 0
+    },
+    "session": {
+     "count": 4800,
+     "p50Ms": 8.628,
+     "p95Ms": 31.418,
+     "p99Ms": 42.49,
+     "maxMs": 125.108,
+     "status": {
+      "200": 4800
+     },
+     "errors": 0
+    },
+    "start_lag": {
+     "count": 4800,
+     "p50Ms": 0.201,
+     "p95Ms": 1.141,
+     "p99Ms": 2.625,
+     "maxMs": 26.948,
+     "errors": 0
+    }
+   },
+   "sql_after": {
+    "run_attempts": 4800,
+    "scores": 4800,
+    "rejections": 0,
+    "outbox_rows": 4800,
+    "outbox_unpublished": 0,
+    "processed_events": 4800,
+    "daily_accepted_sum": 4800
+   },
+   "redis_board_members_after": 4800,
+   "watcher_frames": 32689,
+   "process_cpu_pct": {
+    "session-svc": {
+     "avg_pct": 2,
+     "peak_2s_pct": 3
+    },
+    "score-svc": {
+     "avg_pct": 7,
+     "peak_2s_pct": 9
+    },
+    "leaderboard-svc": {
+     "avg_pct": 152,
+     "peak_2s_pct": 195
+    },
+    "gateway": {
+     "avg_pct": 24,
+     "peak_2s_pct": 34
+    },
+    "outbox-publisher": {
+     "avg_pct": 2,
+     "peak_2s_pct": 3
+    },
+    "stats-worker": {
+     "avg_pct": 2,
+     "peak_2s_pct": 5
+    },
+    "load-probe": {
+     "avg_pct": 20,
+     "peak_2s_pct": 28
+    },
+    "docker_desktop_backend": {
+     "avg_pct": 174,
+     "peak_2s_pct": 221
+    },
+    "docker_vm": {
+     "avg_pct": 227,
+     "peak_2s_pct": 312
+    }
+   },
+   "container_cpu_pct_docker_stats": {
+    "p11sat-redis": {
+     "avg_pct": 54,
+     "peak_pct": 84,
+     "samples": 16
+    },
+    "p11sat-kafka": {
+     "avg_pct": 23,
+     "peak_pct": 109,
+     "samples": 16
+    }
+   },
+   "redis_commands_total": 1675117,
+   "redis_connected_clients_mid": 1043,
+   "redis_pubsub_clients_mid": 895,
+   "redis_slowlog_entries_over_1ms": 128,
+   "gateway_proxy_errors": {},
+   "host_tcp_mid": {
+    "ESTABLISHED": 5890,
+    "TIME_WAIT": 7312
+   },
+   "host_load_avg_first_last": [
+    "{ 14.06 8.72 6.23 }",
+    "{ 18.08 10.94 7.26 }"
+   ]
+  },
+  {
+   "label": "base120",
+   "variant": "base",
+   "new_runs_per_s": 120,
+   "started_local": "18:36:45",
+   "scheduled_runs": 7201,
+   "accepted_scores": 5913,
+   "elapsed_s": 70.8,
+   "results": {
+    "leaderboard": {
+     "count": 707,
+     "p50Ms": 223.163,
+     "p95Ms": 704.088,
+     "p99Ms": 1004.076,
+     "maxMs": 1215.516,
+     "status": {
+      "200": 694,
+      "502": 13
+     },
+     "errors": 0
+    },
+    "live_connect": {
+     "count": 0,
+     "p50Ms": 0,
+     "p95Ms": 0,
+     "p99Ms": 0,
+     "maxMs": 0,
+     "errors": 625
+    },
+    "live_rank_frame": {
+     "count": 5913,
+     "p50Ms": 319.914,
+     "p95Ms": 921.101,
+     "p99Ms": 1150.191,
+     "maxMs": 1316.391,
+     "errors": 0
+    },
+    "score": {
+     "count": 6495,
+     "p50Ms": 128.591,
+     "p95Ms": 377.204,
+     "p99Ms": 560.954,
+     "maxMs": 696.248,
+     "status": {
+      "200": 5913,
+      "502": 582
+     },
+     "errors": 0
+    },
+    "session": {
+     "count": 6576,
+     "p50Ms": 11.381,
+     "p95Ms": 71.255,
+     "p99Ms": 126.854,
+     "maxMs": 294.984,
+     "status": {
+      "200": 6495,
+      "502": 81
+     },
+     "errors": 0
+    },
+    "start_lag": {
+     "count": 7201,
+     "p50Ms": 0.21,
+     "p95Ms": 1.413,
+     "p99Ms": 5.852,
+     "maxMs": 109.402,
+     "errors": 0
+    }
+   },
+   "sql_after": {
+    "run_attempts": 5913,
+    "scores": 5913,
+    "rejections": 0,
+    "outbox_rows": 5913,
+    "outbox_unpublished": 0,
+    "processed_events": 5913,
+    "daily_accepted_sum": 5913
+   },
+   "redis_board_members_after": 5913,
+   "watcher_frames": 18180,
+   "process_cpu_pct": {
+    "session-svc": {
+     "avg_pct": 3,
+     "peak_2s_pct": 7
+    },
+    "score-svc": {
+     "avg_pct": 8,
+     "peak_2s_pct": 13
+    },
+    "leaderboard-svc": {
+     "avg_pct": 131,
+     "peak_2s_pct": 179
+    },
+    "gateway": {
+     "avg_pct": 24,
+     "peak_2s_pct": 44
+    },
+    "outbox-publisher": {
+     "avg_pct": 2,
+     "peak_2s_pct": 5
+    },
+    "stats-worker": {
+     "avg_pct": 2,
+     "peak_2s_pct": 13
+    },
+    "load-probe": {
+     "avg_pct": 17,
+     "peak_2s_pct": 30
+    },
+    "docker_desktop_backend": {
+     "avg_pct": 149,
+     "peak_2s_pct": 207
+    },
+    "docker_vm": {
+     "avg_pct": 212,
+     "peak_2s_pct": 292
+    }
+   },
+   "container_cpu_pct_docker_stats": {
+    "p11sat-redis": {
+     "avg_pct": 47,
+     "peak_pct": 83,
+     "samples": 16
+    },
+    "p11sat-kafka": {
+     "avg_pct": 15,
+     "peak_pct": 41,
+     "samples": 16
+    }
+   },
+   "redis_commands_total": 1262502,
+   "redis_connected_clients_mid": 1380,
+   "redis_pubsub_clients_mid": 1126,
+   "redis_slowlog_entries_over_1ms": 128,
+   "gateway_proxy_errors": {
+    "dial tcp ADDR: connect: can't assign requested address": 841
+   },
+   "host_tcp_mid": {
+    "ESTABLISHED": 7461,
+    "TIME_WAIT": 12600
+   },
+   "host_load_avg_first_last": [
+    "{ 15.12 10.63 7.22 }",
+    "{ 18.71 12.80 8.33 }"
+   ]
+  },
+  {
+   "label": "base160",
+   "variant": "base",
+   "new_runs_per_s": 160,
+   "started_local": "18:38:16",
+   "scheduled_runs": 9600,
+   "accepted_scores": 5356,
+   "elapsed_s": 71.6,
+   "results": {
+    "leaderboard": {
+     "count": 708,
+     "p50Ms": 140.454,
+     "p95Ms": 2427.748,
+     "p99Ms": 3840.863,
+     "maxMs": 4270.645,
+     "status": {
+      "200": 684,
+      "502": 24
+     },
+     "errors": 7
+    },
+    "live_connect": {
+     "count": 0,
+     "p50Ms": 0,
+     "p95Ms": 0,
+     "p99Ms": 0,
+     "maxMs": 0,
+     "errors": 2394
+    },
+    "live_rank_frame": {
+     "count": 5356,
+     "p50Ms": 837.616,
+     "p95Ms": 3159.539,
+     "p99Ms": 5761.584,
+     "maxMs": 6344.982,
+     "errors": 0
+    },
+    "score": {
+     "count": 6331,
+     "p50Ms": 238.581,
+     "p95Ms": 1339.153,
+     "p99Ms": 3904.986,
+     "maxMs": 5638.324,
+     "status": {
+      "200": 5356,
+      "502": 975
+     },
+     "errors": 466
+    },
+    "session": {
+     "count": 7206,
+     "p50Ms": 10.776,
+     "p95Ms": 187.408,
+     "p99Ms": 332.246,
+     "maxMs": 1633.707,
+     "status": {
+      "200": 6797,
+      "502": 409
+     },
+     "errors": 0
+    },
+    "start_lag": {
+     "count": 9600,
+     "p50Ms": 0.17,
+     "p95Ms": 1.339,
+     "p99Ms": 10.128,
+     "maxMs": 77.566,
+     "errors": 0
+    }
+   },
+   "sql_after": {
+    "run_attempts": 5356,
+    "scores": 5356,
+    "rejections": 0,
+    "outbox_rows": 5356,
+    "outbox_unpublished": 0,
+    "processed_events": 5356,
+    "daily_accepted_sum": 5356
+   },
+   "redis_board_members_after": 5356,
+   "watcher_frames": 17947,
+   "process_cpu_pct": {
+    "session-svc": {
+     "avg_pct": 3,
+     "peak_2s_pct": 7
+    },
+    "score-svc": {
+     "avg_pct": 7,
+     "peak_2s_pct": 16
+    },
+    "leaderboard-svc": {
+     "avg_pct": 112,
+     "peak_2s_pct": 187
+    },
+    "gateway": {
+     "avg_pct": 25,
+     "peak_2s_pct": 47
+    },
+    "outbox-publisher": {
+     "avg_pct": 2,
+     "peak_2s_pct": 5
+    },
+    "stats-worker": {
+     "avg_pct": 3,
+     "peak_2s_pct": 18
+    },
+    "load-probe": {
+     "avg_pct": 20,
+     "peak_2s_pct": 65
+    },
+    "docker_desktop_backend": {
+     "avg_pct": 134,
+     "peak_2s_pct": 217
+    },
+    "docker_vm": {
+     "avg_pct": 182,
+     "peak_2s_pct": 268
+    }
+   },
+   "container_cpu_pct_docker_stats": {
+    "p11sat-redis": {
+     "avg_pct": 40,
+     "peak_pct": 84,
+     "samples": 16
+    },
+    "p11sat-kafka": {
+     "avg_pct": 26,
+     "peak_pct": 126,
+     "samples": 16
+    }
+   },
+   "redis_commands_total": 1137963,
+   "redis_connected_clients_mid": 726,
+   "redis_pubsub_clients_mid": 450,
+   "redis_slowlog_entries_over_1ms": 128,
+   "gateway_proxy_errors": {
+    "dial tcp ADDR: connect: can't assign requested address": 1986
+   },
+   "host_tcp_mid": {
+    "ESTABLISHED": 3937,
+    "TIME_WAIT": 14376
+   },
+   "host_load_avg_first_last": [
+    "{ 15.50 12.37 8.25 }",
+    "{ 16.70 13.46 9.01 }"
+   ]
+  }
+ ],
+ "broadcaster_profile_2026_10_22": [
+  {
+   "label": "fix40",
+   "variant": "broadcaster",
+   "new_runs_per_s": 40,
+   "started_local": "18:53:26",
+   "scheduled_runs": 2400,
+   "accepted_scores": 2400,
+   "elapsed_s": 70.2,
+   "results": {
+    "leaderboard": {
+     "count": 701,
+     "p50Ms": 2.561,
+     "p95Ms": 5.402,
+     "p99Ms": 9.116,
+     "maxMs": 73.795,
+     "status": {
+      "200": 701
+     },
+     "errors": 0
+    },
+    "live_rank_frame": {
+     "count": 2400,
+     "p50Ms": 10.377,
+     "p95Ms": 14.689,
+     "p99Ms": 25.121,
+     "maxMs": 125.399,
+     "errors": 0
+    },
+    "score": {
+     "count": 2400,
+     "p50Ms": 4.49,
+     "p95Ms": 7.729,
+     "p99Ms": 15.343,
+     "maxMs": 106.377,
+     "status": {
+      "200": 2400
+     },
+     "errors": 0
+    },
+    "session": {
+     "count": 2400,
+     "p50Ms": 0.897,
+     "p95Ms": 2.149,
+     "p99Ms": 2.942,
+     "maxMs": 17.462,
+     "status": {
+      "200": 2400
+     },
+     "errors": 0
+    },
+    "start_lag": {
+     "count": 2400,
+     "p50Ms": 0.764,
+     "p95Ms": 1.086,
+     "p99Ms": 1.136,
+     "maxMs": 7.954,
+     "errors": 0
+    }
+   },
+   "sql_after": {
+    "run_attempts": 2400,
+    "scores": 2400,
+    "rejections": 0,
+    "outbox_rows": 2400,
+    "outbox_unpublished": 0,
+    "processed_events": 2400,
+    "daily_accepted_sum": 2400
+   },
+   "redis_board_members_after": 2400,
+   "watcher_frames": 119678,
+   "process_cpu_pct": {
+    "session-svc": {
+     "avg_pct": 1,
+     "peak_2s_pct": 3
+    },
+    "score-svc": {
+     "avg_pct": 3,
+     "peak_2s_pct": 4
+    },
+    "leaderboard-svc": {
+     "avg_pct": 33,
+     "peak_2s_pct": 42
+    },
+    "gateway": {
+     "avg_pct": 46,
+     "peak_2s_pct": 59
+    },
+    "outbox-publisher": {
+     "avg_pct": 1,
+     "peak_2s_pct": 1
+    },
+    "stats-worker": {
+     "avg_pct": 2,
+     "peak_2s_pct": 2
+    },
+    "load-probe": {
+     "avg_pct": 34,
+     "peak_2s_pct": 47
+    },
+    "docker_desktop_backend": {
+     "avg_pct": 18,
+     "peak_2s_pct": 23
+    },
+    "docker_vm": {
+     "avg_pct": 57,
+     "peak_2s_pct": 76
+    }
+   },
+   "container_cpu_pct_docker_stats": {
+    "p11sat-redis": {
+     "avg_pct": 6,
+     "peak_pct": 7,
+     "samples": 17
+    },
+    "p11sat-kafka": {
+     "avg_pct": 12,
+     "peak_pct": 40,
+     "samples": 17
+    }
+   },
+   "redis_commands_total": 1008861,
+   "redis_connected_clients_mid": 64,
+   "redis_pubsub_clients_mid": 1,
+   "redis_slowlog_entries_over_1ms": 3,
+   "gateway_proxy_errors": {},
+   "host_tcp_mid": {
+    "ESTABLISHED port 16379": 126,
+    "ESTABLISHED port 18080": 932,
+    "ESTABLISHED port 18083": 920,
+    "TIME_WAIT port 18080": 1197,
+    "TIME_WAIT port 18083": 1198
+   },
+   "host_load_avg_first_last": [
+    "{ 6.39 7.27 7.66 }",
+    "{ 9.21 7.83 7.84 }"
+   ]
+  },
+  {
+   "label": "fix80",
+   "variant": "broadcaster",
+   "new_runs_per_s": 80,
+   "started_local": "18:54:57",
+   "scheduled_runs": 4800,
+   "accepted_scores": 4800,
+   "elapsed_s": 70.2,
+   "results": {
+    "leaderboard": {
+     "count": 701,
+     "p50Ms": 11.892,
+     "p95Ms": 25.058,
+     "p99Ms": 28.744,
+     "maxMs": 88.378,
+     "status": {
+      "200": 701
+     },
+     "errors": 0
+    },
+    "live_rank_frame": {
+     "count": 4800,
+     "p50Ms": 35.799,
+     "p95Ms": 58.838,
+     "p99Ms": 67.839,
+     "maxMs": 131.667,
+     "errors": 0
+    },
+    "score": {
+     "count": 4800,
+     "p50Ms": 27.269,
+     "p95Ms": 48.181,
+     "p99Ms": 55.487,
+     "maxMs": 137.787,
+     "status": {
+      "200": 4800
+     },
+     "errors": 0
+    },
+    "session": {
+     "count": 4800,
+     "p50Ms": 1.576,
+     "p95Ms": 13.31,
+     "p99Ms": 17.246,
+     "maxMs": 57.879,
+     "status": {
+      "200": 4800
+     },
+     "errors": 0
+    },
+    "start_lag": {
+     "count": 4800,
+     "p50Ms": 0.075,
+     "p95Ms": 1.032,
+     "p99Ms": 2.76,
+     "maxMs": 28.454,
+     "errors": 0
+    }
+   },
+   "sql_after": {
+    "run_attempts": 4800,
+    "scores": 4800,
+    "rejections": 0,
+    "outbox_rows": 4800,
+    "outbox_unpublished": 0,
+    "processed_events": 4800,
+    "daily_accepted_sum": 4800
+   },
+   "redis_board_members_after": 4800,
+   "watcher_frames": 161646,
+   "process_cpu_pct": {
+    "session-svc": {
+     "avg_pct": 2,
+     "peak_2s_pct": 4
+    },
+    "score-svc": {
+     "avg_pct": 6,
+     "peak_2s_pct": 9
+    },
+    "leaderboard-svc": {
+     "avg_pct": 85,
+     "peak_2s_pct": 111
+    },
+    "gateway": {
+     "avg_pct": 111,
+     "peak_2s_pct": 142
+    },
+    "outbox-publisher": {
+     "avg_pct": 2,
+     "peak_2s_pct": 2
+    },
+    "stats-worker": {
+     "avg_pct": 4,
+     "peak_2s_pct": 19
+    },
+    "load-probe": {
+     "avg_pct": 82,
+     "peak_2s_pct": 110
+    },
+    "docker_desktop_backend": {
+     "avg_pct": 24,
+     "peak_2s_pct": 31
+    },
+    "docker_vm": {
+     "avg_pct": 71,
+     "peak_2s_pct": 99
+    }
+   },
+   "container_cpu_pct_docker_stats": {
+    "p11sat-redis": {
+     "avg_pct": 8,
+     "peak_pct": 12,
+     "samples": 16
+    },
+    "p11sat-kafka": {
+     "avg_pct": 15,
+     "peak_pct": 35,
+     "samples": 16
+    }
+   },
+   "redis_commands_total": 2570736,
+   "redis_connected_clients_mid": 73,
+   "redis_pubsub_clients_mid": 1,
+   "redis_slowlog_entries_over_1ms": 1,
+   "gateway_proxy_errors": {},
+   "host_tcp_mid": {
+    "ESTABLISHED port 16379": 144,
+    "ESTABLISHED port 18080": 1769,
+    "ESTABLISHED port 18083": 1748,
+    "TIME_WAIT port 18080": 2373,
+    "TIME_WAIT port 18082": 643,
+    "TIME_WAIT port 18083": 2389
+   },
+   "host_load_avg_first_last": [
+    "{ 8.27 7.69 7.79 }",
+    "{ 10.57 8.38 8.02 }"
+   ]
+  },
+  {
+   "label": "fix120",
+   "variant": "broadcaster",
+   "new_runs_per_s": 120,
+   "started_local": "18:56:24",
+   "scheduled_runs": 7201,
+   "accepted_scores": 7201,
+   "elapsed_s": 70.2,
+   "results": {
+    "leaderboard": {
+     "count": 702,
+     "p50Ms": 18.785,
+     "p95Ms": 40.33,
+     "p99Ms": 47.298,
+     "maxMs": 131.721,
+     "status": {
+      "200": 702
+     },
+     "errors": 0
+    },
+    "live_rank_frame": {
+     "count": 7201,
+     "p50Ms": 64.501,
+     "p95Ms": 100.307,
+     "p99Ms": 142.2,
+     "maxMs": 242.261,
+     "errors": 0
+    },
+    "score": {
+     "count": 7201,
+     "p50Ms": 50.513,
+     "p95Ms": 83.143,
+     "p99Ms": 115.02,
+     "maxMs": 227.995,
+     "status": {
+      "200": 7201
+     },
+     "errors": 0
+    },
+    "session": {
+     "count": 7201,
+     "p50Ms": 2.682,
+     "p95Ms": 25.693,
+     "p99Ms": 35.535,
+     "maxMs": 132.706,
+     "status": {
+      "200": 7201
+     },
+     "errors": 0
+    },
+    "start_lag": {
+     "count": 7201,
+     "p50Ms": 0.07,
+     "p95Ms": 1.577,
+     "p99Ms": 3.806,
+     "maxMs": 28.018,
+     "errors": 0
+    }
+   },
+   "sql_after": {
+    "run_attempts": 7201,
+    "scores": 7201,
+    "rejections": 0,
+    "outbox_rows": 7201,
+    "outbox_unpublished": 0,
+    "processed_events": 7201,
+    "daily_accepted_sum": 7201
+   },
+   "redis_board_members_after": 7201,
+   "watcher_frames": 116236,
+   "process_cpu_pct": {
+    "session-svc": {
+     "avg_pct": 3,
+     "peak_2s_pct": 7
+    },
+    "score-svc": {
+     "avg_pct": 8,
+     "peak_2s_pct": 11
+    },
+    "leaderboard-svc": {
+     "avg_pct": 88,
+     "peak_2s_pct": 111
+    },
+    "gateway": {
+     "avg_pct": 112,
+     "peak_2s_pct": 138
+    },
+    "outbox-publisher": {
+     "avg_pct": 2,
+     "peak_2s_pct": 5
+    },
+    "stats-worker": {
+     "avg_pct": 3,
+     "peak_2s_pct": 12
+    },
+    "load-probe": {
+     "avg_pct": 83,
+     "peak_2s_pct": 104
+    },
+    "docker_desktop_backend": {
+     "avg_pct": 25,
+     "peak_2s_pct": 32
+    },
+    "docker_vm": {
+     "avg_pct": 73,
+     "peak_2s_pct": 90
+    }
+   },
+   "container_cpu_pct_docker_stats": {
+    "p11sat-redis": {
+     "avg_pct": 8,
+     "peak_pct": 10,
+     "samples": 16
+    },
+    "p11sat-kafka": {
+     "avg_pct": 15,
+     "peak_pct": 23,
+     "samples": 16
+    }
+   },
+   "redis_commands_total": 2695061,
+   "redis_connected_clients_mid": 90,
+   "redis_pubsub_clients_mid": 1,
+   "redis_slowlog_entries_over_1ms": 7,
+   "gateway_proxy_errors": {},
+   "host_tcp_mid": {
+    "ESTABLISHED port 16379": 178,
+    "ESTABLISHED port 18080": 2640,
+    "ESTABLISHED port 18082": 20,
+    "ESTABLISHED port 18083": 2580,
+    "TIME_WAIT port 18080": 3537,
+    "TIME_WAIT port 18081": 1276,
+    "TIME_WAIT port 18082": 1905,
+    "TIME_WAIT port 18083": 3581
+   },
+   "host_load_avg_first_last": [
+    "{ 8.83 8.10 7.93 }",
+    "{ 11.49 8.99 8.27 }"
+   ]
+  },
+  {
+   "label": "fix160",
+   "variant": "broadcaster",
+   "new_runs_per_s": 160,
+   "started_local": "18:57:56",
+   "scheduled_runs": 9600,
+   "accepted_scores": 7752,
+   "elapsed_s": 70.2,
+   "results": {
+    "leaderboard": {
+     "count": 702,
+     "p50Ms": 24.25,
+     "p95Ms": 59.819,
+     "p99Ms": 76.253,
+     "maxMs": 104.753,
+     "status": {
+      "200": 702
+     },
+     "errors": 0
+    },
+    "live_connect": {
+     "count": 0,
+     "p50Ms": 0,
+     "p95Ms": 0,
+     "p99Ms": 0,
+     "maxMs": 0,
+     "errors": 1003
+    },
+    "live_rank_frame": {
+     "count": 7752,
+     "p50Ms": 108.864,
+     "p95Ms": 168.559,
+     "p99Ms": 190.305,
+     "maxMs": 236.381,
+     "errors": 0
+    },
+    "score": {
+     "count": 8580,
+     "p50Ms": 84.716,
+     "p95Ms": 147.215,
+     "p99Ms": 170.291,
+     "maxMs": 237.253,
+     "status": {
+      "200": 7752,
+      "502": 828
+     },
+     "errors": 0
+    },
+    "session": {
+     "count": 8597,
+     "p50Ms": 9.928,
+     "p95Ms": 41.025,
+     "p99Ms": 55.808,
+     "maxMs": 112.772,
+     "status": {
+      "200": 8580,
+      "502": 17
+     },
+     "errors": 0
+    },
+    "start_lag": {
+     "count": 9600,
+     "p50Ms": 0.08,
+     "p95Ms": 1.465,
+     "p99Ms": 4.41,
+     "maxMs": 31.777,
+     "errors": 0
+    }
+   },
+   "sql_after": {
+    "run_attempts": 7752,
+    "scores": 7752,
+    "rejections": 0,
+    "outbox_rows": 7752,
+    "outbox_unpublished": 0,
+    "processed_events": 7752,
+    "daily_accepted_sum": 7752
+   },
+   "redis_board_members_after": 7752,
+   "watcher_frames": 90240,
+   "process_cpu_pct": {
+    "session-svc": {
+     "avg_pct": 4,
+     "peak_2s_pct": 9
+    },
+    "score-svc": {
+     "avg_pct": 9,
+     "peak_2s_pct": 14
+    },
+    "leaderboard-svc": {
+     "avg_pct": 77,
+     "peak_2s_pct": 108
+    },
+    "gateway": {
+     "avg_pct": 102,
+     "peak_2s_pct": 135
+    },
+    "outbox-publisher": {
+     "avg_pct": 2,
+     "peak_2s_pct": 6
+    },
+    "stats-worker": {
+     "avg_pct": 4,
+     "peak_2s_pct": 22
+    },
+    "load-probe": {
+     "avg_pct": 76,
+     "peak_2s_pct": 103
+    },
+    "docker_desktop_backend": {
+     "avg_pct": 26,
+     "peak_2s_pct": 35
+    },
+    "docker_vm": {
+     "avg_pct": 79,
+     "peak_2s_pct": 129
+    }
+   },
+   "container_cpu_pct_docker_stats": {
+    "p11sat-redis": {
+     "avg_pct": 8,
+     "peak_pct": 12,
+     "samples": 18
+    },
+    "p11sat-kafka": {
+     "avg_pct": 15,
+     "peak_pct": 38,
+     "samples": 18
+    }
+   },
+   "redis_commands_total": 2393590,
+   "redis_connected_clients_mid": 103,
+   "redis_pubsub_clients_mid": 1,
+   "redis_slowlog_entries_over_1ms": 2,
+   "gateway_proxy_errors": {
+    "dial tcp ADDR: connect: can't assign requested address": 1333
+   },
+   "host_tcp_mid": {
+    "ESTABLISHED port 16379": 204,
+    "ESTABLISHED port 18080": 2087,
+    "ESTABLISHED port 18083": 1998,
+    "TIME_WAIT port 18080": 4637,
+    "TIME_WAIT port 18081": 2197,
+    "TIME_WAIT port 18082": 2520,
+    "TIME_WAIT port 18083": 4782
+   },
+   "host_load_avg_first_last": [
+    "{ 9.31 8.63 8.15 }",
+    "{ 8.15 8.58 8.19 }"
+   ]
+  },
+  {
+   "label": "fix200",
+   "variant": "broadcaster",
+   "new_runs_per_s": 200,
+   "started_local": "18:59:31",
+   "scheduled_runs": 12000,
+   "accepted_scores": 6118,
+   "elapsed_s": 70.2,
+   "results": {
+    "leaderboard": {
+     "count": 700,
+     "p50Ms": 35.043,
+     "p95Ms": 107.625,
+     "p99Ms": 167.065,
+     "maxMs": 218.796,
+     "status": {
+      "200": 694,
+      "502": 6
+     },
+     "errors": 2
+    },
+    "live_connect": {
+     "count": 0,
+     "p50Ms": 0,
+     "p95Ms": 0,
+     "p99Ms": 0,
+     "maxMs": 0,
+     "errors": 3229
+    },
+    "live_rank_frame": {
+     "count": 6118,
+     "p50Ms": 570.922,
+     "p95Ms": 9857.457,
+     "p99Ms": 9986.118,
+     "maxMs": 10041.879,
+     "errors": 0
+    },
+    "score": {
+     "count": 7966,
+     "p50Ms": 190.048,
+     "p95Ms": 9821.908,
+     "p99Ms": 9966.296,
+     "maxMs": 10000.275,
+     "status": {
+      "200": 6118,
+      "502": 1747,
+      "503": 101
+     },
+     "errors": 686
+    },
+    "session": {
+     "count": 8768,
+     "p50Ms": 19.072,
+     "p95Ms": 75.115,
+     "p99Ms": 88.592,
+     "maxMs": 216.775,
+     "status": {
+      "200": 8652,
+      "502": 116
+     },
+     "errors": 3
+    },
+    "start_lag": {
+     "count": 12000,
+     "p50Ms": 0.076,
+     "p95Ms": 1.072,
+     "p99Ms": 4.085,
+     "maxMs": 19.848,
+     "errors": 0
+    }
+   },
+   "sql_after": {
+    "run_attempts": 6216,
+    "scores": 6216,
+    "rejections": 0,
+    "outbox_rows": 6216,
+    "outbox_unpublished": 0,
+    "processed_events": 6216,
+    "daily_accepted_sum": 6216
+   },
+   "redis_board_members_after": 6216,
+   "watcher_frames": 63200,
+   "process_cpu_pct": {
+    "session-svc": {
+     "avg_pct": 3,
+     "peak_2s_pct": 9
+    },
+    "score-svc": {
+     "avg_pct": 7,
+     "peak_2s_pct": 17
+    },
+    "leaderboard-svc": {
+     "avg_pct": 65,
+     "peak_2s_pct": 106
+    },
+    "gateway": {
+     "avg_pct": 89,
+     "peak_2s_pct": 133
+    },
+    "outbox-publisher": {
+     "avg_pct": 2,
+     "peak_2s_pct": 4
+    },
+    "stats-worker": {
+     "avg_pct": 3,
+     "peak_2s_pct": 15
+    },
+    "load-probe": {
+     "avg_pct": 65,
+     "peak_2s_pct": 97
+    },
+    "docker_desktop_backend": {
+     "avg_pct": 25,
+     "peak_2s_pct": 31
+    },
+    "docker_vm": {
+     "avg_pct": 73,
+     "peak_2s_pct": 96
+    }
+   },
+   "container_cpu_pct_docker_stats": {
+    "p11sat-redis": {
+     "avg_pct": 7,
+     "peak_pct": 11,
+     "samples": 16
+    },
+    "p11sat-kafka": {
+     "avg_pct": 13,
+     "peak_pct": 41,
+     "samples": 16
+    }
+   },
+   "redis_commands_total": 1980223,
+   "redis_connected_clients_mid": 125,
+   "redis_pubsub_clients_mid": 1,
+   "redis_slowlog_entries_over_1ms": 2,
+   "gateway_proxy_errors": {
+    "dial tcp ADDR: connect: can't assign requested address": 2973,
+    "context canceled": 579
+   },
+   "host_tcp_mid": {
+    "ESTABLISHED port 16379": 248,
+    "ESTABLISHED port 18080": 3168,
+    "ESTABLISHED port 18082": 934,
+    "ESTABLISHED port 18083": 1854,
+    "TIME_WAIT port 18080": 4414,
+    "TIME_WAIT port 18081": 2205,
+    "TIME_WAIT port 18082": 1667,
+    "TIME_WAIT port 18083": 4888
+   },
+   "host_load_avg_first_last": [
+    "{ 6.39 8.15 8.04 }",
+    "{ 7.83 8.09 8.02 }"
+   ]
+  }
+ ],
+ "broadcaster_ab_80_per_s_2026_10_22": {
+  "order": "base, broadcaster, base, broadcaster; each on a fresh stack",
+  "runs": [
+   {
+    "label": "ab80_base_1",
+    "variant": "base",
+    "new_runs_per_s": 80,
+    "started_local": "19:08:08",
+    "scheduled_runs": 4800,
+    "accepted_scores": 4800,
+    "elapsed_s": 70.3,
+    "results": {
+     "leaderboard": {
+      "count": 703,
+      "p50Ms": 118.256,
+      "p95Ms": 218.437,
+      "p99Ms": 285.542,
+      "maxMs": 338.103,
+      "status": {
+       "200": 703
+      },
+      "errors": 0
+     },
+     "live_rank_frame": {
+      "count": 4800,
+      "p50Ms": 136.03,
+      "p95Ms": 286.628,
+      "p99Ms": 372.432,
+      "maxMs": 499.244,
+      "errors": 0
+     },
+     "score": {
+      "count": 4800,
+      "p50Ms": 63.248,
+      "p95Ms": 116.298,
+      "p99Ms": 146.759,
+      "maxMs": 263.253,
+      "status": {
+       "200": 4800
+      },
+      "errors": 0
+     },
+     "session": {
+      "count": 4800,
+      "p50Ms": 7.864,
+      "p95Ms": 28.511,
+      "p99Ms": 40.537,
+      "maxMs": 97.958,
+      "status": {
+       "200": 4800
+      },
+      "errors": 0
+     },
+     "start_lag": {
+      "count": 4800,
+      "p50Ms": 0.215,
+      "p95Ms": 1.076,
+      "p99Ms": 2.538,
+      "maxMs": 37.228,
+      "errors": 0
+     }
+    },
+    "sql_after": {
+     "run_attempts": 4800,
+     "scores": 4800,
+     "rejections": 0,
+     "outbox_rows": 4800,
+     "outbox_unpublished": 0,
+     "processed_events": 4800,
+     "daily_accepted_sum": 4800
+    },
+    "redis_board_members_after": 4800,
+    "watcher_frames": 33625,
+    "process_cpu_pct": {
+     "session-svc": {
+      "avg_pct": 2,
+      "peak_2s_pct": 5
+     },
+     "score-svc": {
+      "avg_pct": 7,
+      "peak_2s_pct": 10
+     },
+     "leaderboard-svc": {
+      "avg_pct": 161,
+      "peak_2s_pct": 201
+     },
+     "gateway": {
+      "avg_pct": 27,
+      "peak_2s_pct": 36
+     },
+     "outbox-publisher": {
+      "avg_pct": 2,
+      "peak_2s_pct": 3
+     },
+     "stats-worker": {
+      "avg_pct": 3,
+      "peak_2s_pct": 5
+     },
+     "load-probe": {
+      "avg_pct": 22,
+      "peak_2s_pct": 31
+     },
+     "docker_desktop_backend": {
+      "avg_pct": 195,
+      "peak_2s_pct": 241
+     },
+     "docker_vm": {
+      "avg_pct": 235,
+      "peak_2s_pct": 296
+     }
+    },
+    "container_cpu_pct_docker_stats": {
+     "p11sat-redis": {
+      "avg_pct": 52,
+      "peak_pct": 84,
+      "samples": 16
+     },
+     "p11sat-kafka": {
+      "avg_pct": 24,
+      "peak_pct": 78,
+      "samples": 16
+     }
+    },
+    "redis_commands_total": 1731115,
+    "redis_connected_clients_mid": 1044,
+    "redis_pubsub_clients_mid": 895,
+    "redis_slowlog_entries_over_1ms": 128,
+    "gateway_proxy_errors": {},
+    "host_tcp_mid": {
+     "ESTABLISHED port 16379": 2092,
+     "ESTABLISHED port 18080": 1868,
+     "ESTABLISHED port 18083": 1807,
+     "TIME_WAIT port 16379": 1415,
+     "TIME_WAIT port 18080": 2369,
+     "TIME_WAIT port 18081": 280,
+     "TIME_WAIT port 18082": 901,
+     "TIME_WAIT port 18083": 2374
+    },
+    "host_load_avg_first_last": [
+     "{ 3.09 3.99 5.87 }",
+     "{ 13.02 6.71 6.74 }"
+    ]
+   },
+   {
+    "label": "ab80_fix_2",
+    "variant": "broadcaster",
+    "new_runs_per_s": 80,
+    "started_local": "19:09:39",
+    "scheduled_runs": 4800,
+    "accepted_scores": 4800,
+    "elapsed_s": 70.2,
+    "results": {
+     "leaderboard": {
+      "count": 702,
+      "p50Ms": 11.603,
+      "p95Ms": 25.637,
+      "p99Ms": 30.396,
+      "maxMs": 50.777,
+      "status": {
+       "200": 702
+      },
+      "errors": 0
+     },
+     "live_rank_frame": {
+      "count": 4800,
+      "p50Ms": 35.086,
+      "p95Ms": 60.212,
+      "p99Ms": 71.936,
+      "maxMs": 121.927,
+      "errors": 0
+     },
+     "score": {
+      "count": 4800,
+      "p50Ms": 26.448,
+      "p95Ms": 48.544,
+      "p99Ms": 56.786,
+      "maxMs": 110.215,
+      "status": {
+       "200": 4800
+      },
+      "errors": 0
+     },
+     "session": {
+      "count": 4800,
+      "p50Ms": 1.735,
+      "p95Ms": 14.333,
+      "p99Ms": 17.591,
+      "maxMs": 75.408,
+      "status": {
+       "200": 4800
+      },
+      "errors": 0
+     },
+     "start_lag": {
+      "count": 4800,
+      "p50Ms": 0.088,
+      "p95Ms": 1.334,
+      "p99Ms": 3.336,
+      "maxMs": 28.433,
+      "errors": 0
+     }
+    },
+    "sql_after": {
+     "run_attempts": 4800,
+     "scores": 4800,
+     "rejections": 0,
+     "outbox_rows": 4800,
+     "outbox_unpublished": 0,
+     "processed_events": 4800,
+     "daily_accepted_sum": 4800
+    },
+    "redis_board_members_after": 4800,
+    "watcher_frames": 158450,
+    "process_cpu_pct": {
+     "session-svc": {
+      "avg_pct": 2,
+      "peak_2s_pct": 6
+     },
+     "score-svc": {
+      "avg_pct": 7,
+      "peak_2s_pct": 9
+     },
+     "leaderboard-svc": {
+      "avg_pct": 85,
+      "peak_2s_pct": 109
+     },
+     "gateway": {
+      "avg_pct": 110,
+      "peak_2s_pct": 137
+     },
+     "outbox-publisher": {
+      "avg_pct": 2,
+      "peak_2s_pct": 3
+     },
+     "stats-worker": {
+      "avg_pct": 4,
+      "peak_2s_pct": 18
+     },
+     "load-probe": {
+      "avg_pct": 83,
+      "peak_2s_pct": 108
+     },
+     "docker_desktop_backend": {
+      "avg_pct": 23,
+      "peak_2s_pct": 31
+     },
+     "docker_vm": {
+      "avg_pct": 71,
+      "peak_2s_pct": 100
+     }
+    },
+    "container_cpu_pct_docker_stats": {
+     "p11sat-redis": {
+      "avg_pct": 7,
+      "peak_pct": 9,
+      "samples": 15
+     },
+     "p11sat-kafka": {
+      "avg_pct": 13,
+      "peak_pct": 25,
+      "samples": 15
+     }
+    },
+    "redis_commands_total": 2512581,
+    "redis_connected_clients_mid": 72,
+    "redis_pubsub_clients_mid": 1,
+    "redis_slowlog_entries_over_1ms": 7,
+    "gateway_proxy_errors": {},
+    "host_tcp_mid": {
+     "ESTABLISHED port 16379": 142,
+     "ESTABLISHED port 18080": 1772,
+     "ESTABLISHED port 18083": 1740,
+     "TIME_WAIT port 18080": 2371,
+     "TIME_WAIT port 18081": 27,
+     "TIME_WAIT port 18082": 696,
+     "TIME_WAIT port 18083": 2394
+    },
+    "host_load_avg_first_last": [
+     "{ 9.82 6.38 6.62 }",
+     "{ 10.50 7.56 7.06 }"
+    ]
+   },
+   {
+    "label": "ab80_base_3",
+    "variant": "base",
+    "new_runs_per_s": 80,
+    "started_local": "19:11:07",
+    "scheduled_runs": 4800,
+    "accepted_scores": 4800,
+    "elapsed_s": 70.4,
+    "results": {
+     "leaderboard": {
+      "count": 704,
+      "p50Ms": 123.359,
+      "p95Ms": 226.052,
+      "p99Ms": 302.182,
+      "maxMs": 381.841,
+      "status": {
+       "200": 704
+      },
+      "errors": 0
+     },
+     "live_rank_frame": {
+      "count": 4800,
+      "p50Ms": 144.623,
+      "p95Ms": 306.272,
+      "p99Ms": 400.211,
+      "maxMs": 554.077,
+      "errors": 0
+     },
+     "score": {
+      "count": 4800,
+      "p50Ms": 64.001,
+      "p95Ms": 126.175,
+      "p99Ms": 159.955,
+      "maxMs": 246.766,
+      "status": {
+       "200": 4800
+      },
+      "errors": 0
+     },
+     "session": {
+      "count": 4800,
+      "p50Ms": 7.713,
+      "p95Ms": 29.074,
+      "p99Ms": 43.953,
+      "maxMs": 122.945,
+      "status": {
+       "200": 4800
+      },
+      "errors": 0
+     },
+     "start_lag": {
+      "count": 4800,
+      "p50Ms": 0.21,
+      "p95Ms": 1.074,
+      "p99Ms": 2.797,
+      "maxMs": 21.149,
+      "errors": 0
+     }
+    },
+    "sql_after": {
+     "run_attempts": 4800,
+     "scores": 4800,
+     "rejections": 0,
+     "outbox_rows": 4800,
+     "outbox_unpublished": 0,
+     "processed_events": 4800,
+     "daily_accepted_sum": 4800
+    },
+    "redis_board_members_after": 4800,
+    "watcher_frames": 33576,
+    "process_cpu_pct": {
+     "session-svc": {
+      "avg_pct": 3,
+      "peak_2s_pct": 6
+     },
+     "score-svc": {
+      "avg_pct": 7,
+      "peak_2s_pct": 9
+     },
+     "leaderboard-svc": {
+      "avg_pct": 155,
+      "peak_2s_pct": 196
+     },
+     "gateway": {
+      "avg_pct": 26,
+      "peak_2s_pct": 37
+     },
+     "outbox-publisher": {
+      "avg_pct": 2,
+      "peak_2s_pct": 3
+     },
+     "stats-worker": {
+      "avg_pct": 3,
+      "peak_2s_pct": 6
+     },
+     "load-probe": {
+      "avg_pct": 21,
+      "peak_2s_pct": 32
+     },
+     "docker_desktop_backend": {
+      "avg_pct": 189,
+      "peak_2s_pct": 244
+     },
+     "docker_vm": {
+      "avg_pct": 233,
+      "peak_2s_pct": 298
+     }
+    },
+    "container_cpu_pct_docker_stats": {
+     "p11sat-redis": {
+      "avg_pct": 56,
+      "peak_pct": 87,
+      "samples": 16
+     },
+     "p11sat-kafka": {
+      "avg_pct": 29,
+      "peak_pct": 116,
+      "samples": 16
+     }
+    },
+    "redis_commands_total": 1683773,
+    "redis_connected_clients_mid": 1047,
+    "redis_pubsub_clients_mid": 899,
+    "redis_slowlog_entries_over_1ms": 128,
+    "gateway_proxy_errors": {},
+    "host_tcp_mid": {
+     "ESTABLISHED port 16379": 2104,
+     "ESTABLISHED port 18080": 1878,
+     "ESTABLISHED port 18082": 34,
+     "ESTABLISHED port 18083": 1822,
+     "TIME_WAIT port 16379": 1398,
+     "TIME_WAIT port 18080": 2369,
+     "TIME_WAIT port 18081": 362,
+     "TIME_WAIT port 18082": 982,
+     "TIME_WAIT port 18083": 2386
+    },
+    "host_load_avg_first_last": [
+     "{ 8.96 7.37 7.00 }",
+     "{ 17.76 10.55 8.24 }"
+    ]
+   },
+   {
+    "label": "ab80_fix_4",
+    "variant": "broadcaster",
+    "new_runs_per_s": 80,
+    "started_local": "19:12:38",
+    "scheduled_runs": 4800,
+    "accepted_scores": 4800,
+    "elapsed_s": 70.2,
+    "results": {
+     "leaderboard": {
+      "count": 702,
+      "p50Ms": 12.244,
+      "p95Ms": 26.232,
+      "p99Ms": 37.87,
+      "maxMs": 57.158,
+      "status": {
+       "200": 702
+      },
+      "errors": 0
+     },
+     "live_rank_frame": {
+      "count": 4800,
+      "p50Ms": 35.822,
+      "p95Ms": 62.554,
+      "p99Ms": 86.741,
+      "maxMs": 142.712,
+      "errors": 0
+     },
+     "score": {
+      "count": 4800,
+      "p50Ms": 27.369,
+      "p95Ms": 50.19,
+      "p99Ms": 69.521,
+      "maxMs": 134.667,
+      "status": {
+       "200": 4800
+      },
+      "errors": 0
+     },
+     "session": {
+      "count": 4800,
+      "p50Ms": 1.769,
+      "p95Ms": 15.038,
+      "p99Ms": 20.402,
+      "maxMs": 50.882,
+      "status": {
+       "200": 4800
+      },
+      "errors": 0
+     },
+     "start_lag": {
+      "count": 4800,
+      "p50Ms": 0.092,
+      "p95Ms": 1.567,
+      "p99Ms": 3.988,
+      "maxMs": 24.884,
+      "errors": 0
+     }
+    },
+    "sql_after": {
+     "run_attempts": 4800,
+     "scores": 4800,
+     "rejections": 0,
+     "outbox_rows": 4800,
+     "outbox_unpublished": 0,
+     "processed_events": 4800,
+     "daily_accepted_sum": 4800
+    },
+    "redis_board_members_after": 4800,
+    "watcher_frames": 158268,
+    "process_cpu_pct": {
+     "session-svc": {
+      "avg_pct": 2,
+      "peak_2s_pct": 5
+     },
+     "score-svc": {
+      "avg_pct": 7,
+      "peak_2s_pct": 9
+     },
+     "leaderboard-svc": {
+      "avg_pct": 85,
+      "peak_2s_pct": 112
+     },
+     "gateway": {
+      "avg_pct": 109,
+      "peak_2s_pct": 140
+     },
+     "outbox-publisher": {
+      "avg_pct": 2,
+      "peak_2s_pct": 3
+     },
+     "stats-worker": {
+      "avg_pct": 4,
+      "peak_2s_pct": 18
+     },
+     "load-probe": {
+      "avg_pct": 83,
+      "peak_2s_pct": 111
+     },
+     "docker_desktop_backend": {
+      "avg_pct": 23,
+      "peak_2s_pct": 29
+     },
+     "docker_vm": {
+      "avg_pct": 71,
+      "peak_2s_pct": 114
+     }
+    },
+    "container_cpu_pct_docker_stats": {
+     "p11sat-redis": {
+      "avg_pct": 8,
+      "peak_pct": 11,
+      "samples": 15
+     },
+     "p11sat-kafka": {
+      "avg_pct": 18,
+      "peak_pct": 39,
+      "samples": 15
+     }
+    },
+    "redis_commands_total": 2512912,
+    "redis_connected_clients_mid": 70,
+    "redis_pubsub_clients_mid": 1,
+    "redis_slowlog_entries_over_1ms": 7,
+    "gateway_proxy_errors": {},
+    "host_tcp_mid": {
+     "ESTABLISHED port 16379": 138,
+     "ESTABLISHED port 18080": 1770,
+     "ESTABLISHED port 18083": 1744,
+     "TIME_WAIT port 18080": 2352,
+     "TIME_WAIT port 18081": 48,
+     "TIME_WAIT port 18082": 681,
+     "TIME_WAIT port 18083": 2391
+    },
+    "host_load_avg_first_last": [
+     "{ 13.61 10.06 8.11 }",
+     "{ 11.42 9.95 8.22 }"
+    ]
+   }
+  ]
+ },
+ "profiles_80_per_s_2026_10_22": {
+  "how": "separate runs with a pprof listener compiled into leaderboard-svc only (a temporary file, not committed); 15 s CPU profile from 22 s into the probe; goroutine count at 22 s",
+  "runs": [
+   {
+    "label": "prof80_base",
+    "variant": "base (pprof build)",
+    "new_runs_per_s": 80,
+    "started_local": "19:14:07",
+    "scheduled_runs": 4800,
+    "accepted_scores": 4800,
+    "elapsed_s": 70.4,
+    "results": {
+     "leaderboard": {
+      "count": 704,
+      "p50Ms": 123.545,
+      "p95Ms": 275.199,
+      "p99Ms": 372.174,
+      "maxMs": 493.603,
+      "status": {
+       "200": 704
+      },
+      "errors": 0
+     },
+     "live_rank_frame": {
+      "count": 4800,
+      "p50Ms": 149.096,
+      "p95Ms": 344.252,
+      "p99Ms": 528.994,
+      "maxMs": 732.495,
+      "errors": 0
+     },
+     "score": {
+      "count": 4800,
+      "p50Ms": 66.272,
+      "p95Ms": 131.851,
+      "p99Ms": 181.452,
+      "maxMs": 383.656,
+      "status": {
+       "200": 4800
+      },
+      "errors": 0
+     },
+     "session": {
+      "count": 4800,
+      "p50Ms": 8.161,
+      "p95Ms": 31.064,
+      "p99Ms": 42.496,
+      "maxMs": 81.616,
+      "status": {
+       "200": 4800
+      },
+      "errors": 0
+     },
+     "start_lag": {
+      "count": 4800,
+      "p50Ms": 0.232,
+      "p95Ms": 1.301,
+      "p99Ms": 3.012,
+      "maxMs": 15.51,
+      "errors": 0
+     }
+    },
+    "sql_after": {
+     "run_attempts": 4800,
+     "scores": 4800,
+     "rejections": 0,
+     "outbox_rows": 4800,
+     "outbox_unpublished": 0,
+     "processed_events": 4800,
+     "daily_accepted_sum": 4800
+    },
+    "redis_board_members_after": 4800,
+    "watcher_frames": 32097,
+    "process_cpu_pct": {
+     "session-svc": {
+      "avg_pct": 2,
+      "peak_2s_pct": 5
+     },
+     "score-svc": {
+      "avg_pct": 7,
+      "peak_2s_pct": 10
+     },
+     "leaderboard-svc": {
+      "avg_pct": 151,
+      "peak_2s_pct": 194
+     },
+     "gateway": {
+      "avg_pct": 25,
+      "peak_2s_pct": 35
+     },
+     "outbox-publisher": {
+      "avg_pct": 2,
+      "peak_2s_pct": 3
+     },
+     "stats-worker": {
+      "avg_pct": 2,
+      "peak_2s_pct": 6
+     },
+     "load-probe": {
+      "avg_pct": 20,
+      "peak_2s_pct": 30
+     },
+     "docker_desktop_backend": {
+      "avg_pct": 183,
+      "peak_2s_pct": 229
+     },
+     "docker_vm": {
+      "avg_pct": 228,
+      "peak_2s_pct": 291
+     }
+    },
+    "container_cpu_pct_docker_stats": {
+     "p11sat-redis": {
+      "avg_pct": 48,
+      "peak_pct": 84,
+      "samples": 17
+     },
+     "p11sat-kafka": {
+      "avg_pct": 22,
+      "peak_pct": 52,
+      "samples": 17
+     }
+    },
+    "redis_commands_total": 1630863,
+    "redis_connected_clients_mid": 1045,
+    "redis_pubsub_clients_mid": 891,
+    "redis_slowlog_entries_over_1ms": 128,
+    "gateway_proxy_errors": {},
+    "host_tcp_mid": {
+     "ESTABLISHED port 16379": 2106,
+     "ESTABLISHED port 18080": 1870,
+     "ESTABLISHED port 18083": 1806,
+     "TIME_WAIT port 16379": 1494,
+     "TIME_WAIT port 18080": 2371,
+     "TIME_WAIT port 18081": 397,
+     "TIME_WAIT port 18082": 981,
+     "TIME_WAIT port 18083": 2385
+    },
+    "host_load_avg_first_last": [
+     "{ 9.27 9.55 8.11 }",
+     "{ 16.54 11.71 9.05 }"
+    ],
+    "leaderboard_goroutines_mid": 4510
+   },
+   {
+    "label": "prof80_fix",
+    "variant": "broadcaster (pprof build)",
+    "new_runs_per_s": 80,
+    "started_local": "19:15:40",
+    "scheduled_runs": 4800,
+    "accepted_scores": 4800,
+    "elapsed_s": 70.2,
+    "results": {
+     "leaderboard": {
+      "count": 702,
+      "p50Ms": 12.206,
+      "p95Ms": 26.43,
+      "p99Ms": 30.838,
+      "maxMs": 80.309,
+      "status": {
+       "200": 702
+      },
+      "errors": 0
+     },
+     "live_rank_frame": {
+      "count": 4800,
+      "p50Ms": 37.657,
+      "p95Ms": 62.138,
+      "p99Ms": 88.822,
+      "maxMs": 181.371,
+      "errors": 0
+     },
+     "score": {
+      "count": 4800,
+      "p50Ms": 29.35,
+      "p95Ms": 50.085,
+      "p99Ms": 74.464,
+      "maxMs": 177.974,
+      "status": {
+       "200": 4800
+      },
+      "errors": 0
+     },
+     "session": {
+      "count": 4800,
+      "p50Ms": 1.84,
+      "p95Ms": 14.824,
+      "p99Ms": 20.017,
+      "maxMs": 81.791,
+      "status": {
+       "200": 4800
+      },
+      "errors": 0
+     },
+     "start_lag": {
+      "count": 4800,
+      "p50Ms": 0.076,
+      "p95Ms": 1.164,
+      "p99Ms": 3.351,
+      "maxMs": 51.534,
+      "errors": 0
+     }
+    },
+    "sql_after": {
+     "run_attempts": 4800,
+     "scores": 4800,
+     "rejections": 0,
+     "outbox_rows": 4800,
+     "outbox_unpublished": 0,
+     "processed_events": 4800,
+     "daily_accepted_sum": 4800
+    },
+    "redis_board_members_after": 4800,
+    "watcher_frames": 159216,
+    "process_cpu_pct": {
+     "session-svc": {
+      "avg_pct": 2,
+      "peak_2s_pct": 5
+     },
+     "score-svc": {
+      "avg_pct": 6,
+      "peak_2s_pct": 9
+     },
+     "leaderboard-svc": {
+      "avg_pct": 85,
+      "peak_2s_pct": 110
+     },
+     "gateway": {
+      "avg_pct": 109,
+      "peak_2s_pct": 139
+     },
+     "outbox-publisher": {
+      "avg_pct": 2,
+      "peak_2s_pct": 2
+     },
+     "stats-worker": {
+      "avg_pct": 4,
+      "peak_2s_pct": 18
+     },
+     "load-probe": {
+      "avg_pct": 82,
+      "peak_2s_pct": 109
+     },
+     "docker_desktop_backend": {
+      "avg_pct": 23,
+      "peak_2s_pct": 30
+     },
+     "docker_vm": {
+      "avg_pct": 73,
+      "peak_2s_pct": 118
+     }
+    },
+    "container_cpu_pct_docker_stats": {
+     "p11sat-redis": {
+      "avg_pct": 7,
+      "peak_pct": 11,
+      "samples": 16
+     },
+     "p11sat-kafka": {
+      "avg_pct": 15,
+      "peak_pct": 46,
+      "samples": 16
+     }
+    },
+    "redis_commands_total": 2534571,
+    "redis_connected_clients_mid": 71,
+    "redis_pubsub_clients_mid": 1,
+    "redis_slowlog_entries_over_1ms": 8,
+    "gateway_proxy_errors": {},
+    "host_tcp_mid": {
+     "ESTABLISHED port 16379": 140,
+     "ESTABLISHED port 18080": 1787,
+     "ESTABLISHED port 18083": 1748,
+     "TIME_WAIT port 18080": 2372,
+     "TIME_WAIT port 18081": 28,
+     "TIME_WAIT port 18082": 630,
+     "TIME_WAIT port 18083": 2393
+    },
+    "host_load_avg_first_last": [
+     "{ 13.08 11.19 8.91 }",
+     "{ 12.14 11.01 9.00 }"
+    ],
+    "leaderboard_goroutines_mid": 1755
+   }
+  ],
+  "base_cpu_profile": "about 160% CPU; 44% of samples under go-redis connection reads, 27% under the per-socket completeBoard, 7% writing WebSocket frames",
+  "broadcaster_cpu_profile": "about 94% CPU; 77% writing WebSocket frames, 3% building boards (completeBoardRanks), Redis about 2%"
+ },
+ "gateway_ab_160_per_s_2026_10_22": {
+  "order": "broadcaster, +gateway pool, broadcaster, +gateway pool; each on a fresh stack",
+  "runs": [
+   {
+    "label": "ab160_fix_1",
+    "variant": "broadcaster",
+    "new_runs_per_s": 160,
+    "started_local": "19:17:13",
+    "scheduled_runs": 9600,
+    "accepted_scores": 7860,
+    "elapsed_s": 70.3,
+    "results": {
+     "leaderboard": {
+      "count": 702,
+      "p50Ms": 28.876,
+      "p95Ms": 68.305,
+      "p99Ms": 95.807,
+      "maxMs": 103.755,
+      "status": {
+       "200": 702
+      },
+      "errors": 0
+     },
+     "live_connect": {
+      "count": 0,
+      "p50Ms": 0,
+      "p95Ms": 0,
+      "p99Ms": 0,
+      "maxMs": 0,
+      "errors": 964
+     },
+     "live_rank_frame": {
+      "count": 7860,
+      "p50Ms": 122.588,
+      "p95Ms": 212.187,
+      "p99Ms": 261.351,
+      "maxMs": 374.109,
+      "errors": 0
+     },
+     "score": {
+      "count": 8623,
+      "p50Ms": 95.879,
+      "p95Ms": 186.451,
+      "p99Ms": 230.842,
+      "maxMs": 320.679,
+      "status": {
+       "200": 7860,
+       "502": 763
+      },
+      "errors": 0
+     },
+     "session": {
+      "count": 8636,
+      "p50Ms": 14.352,
+      "p95Ms": 52.571,
+      "p99Ms": 75.948,
+      "maxMs": 161.846,
+      "status": {
+       "200": 8623,
+       "502": 13
+      },
+      "errors": 0
+     },
+     "start_lag": {
+      "count": 9600,
+      "p50Ms": 0.108,
+      "p95Ms": 2.947,
+      "p99Ms": 10.037,
+      "maxMs": 61.467,
+      "errors": 0
+     }
+    },
+    "sql_after": {
+     "run_attempts": 7860,
+     "scores": 7860,
+     "rejections": 0,
+     "outbox_rows": 7860,
+     "outbox_unpublished": 0,
+     "processed_events": 7860,
+     "daily_accepted_sum": 7860
+    },
+    "redis_board_members_after": 7860,
+    "watcher_frames": 85050,
+    "process_cpu_pct": {
+     "session-svc": {
+      "avg_pct": 4,
+      "peak_2s_pct": 9
+     },
+     "score-svc": {
+      "avg_pct": 10,
+      "peak_2s_pct": 15
+     },
+     "leaderboard-svc": {
+      "avg_pct": 77,
+      "peak_2s_pct": 108
+     },
+     "gateway": {
+      "avg_pct": 102,
+      "peak_2s_pct": 134
+     },
+     "outbox-publisher": {
+      "avg_pct": 2,
+      "peak_2s_pct": 5
+     },
+     "stats-worker": {
+      "avg_pct": 4,
+      "peak_2s_pct": 22
+     },
+     "load-probe": {
+      "avg_pct": 79,
+      "peak_2s_pct": 107
+     },
+     "docker_desktop_backend": {
+      "avg_pct": 25,
+      "peak_2s_pct": 34
+     },
+     "docker_vm": {
+      "avg_pct": 78,
+      "peak_2s_pct": 139
+     }
+    },
+    "container_cpu_pct_docker_stats": {
+     "p11sat-redis": {
+      "avg_pct": 7,
+      "peak_pct": 11,
+      "samples": 18
+     },
+     "p11sat-kafka": {
+      "avg_pct": 17,
+      "peak_pct": 46,
+      "samples": 18
+     }
+    },
+    "redis_commands_total": 2290848,
+    "redis_connected_clients_mid": 110,
+    "redis_pubsub_clients_mid": 1,
+    "redis_slowlog_entries_over_1ms": 11,
+    "gateway_proxy_errors": {
+     "dial tcp ADDR: connect: can't assign requested address": 1288
+    },
+    "host_tcp_mid": {
+     "ESTABLISHED port 16379": 218,
+     "ESTABLISHED port 18080": 2046,
+     "ESTABLISHED port 18083": 1936,
+     "TIME_WAIT port 18080": 4520,
+     "TIME_WAIT port 18081": 2297,
+     "TIME_WAIT port 18082": 2567,
+     "TIME_WAIT port 18083": 4778
+    },
+    "host_load_avg_first_last": [
+     "{ 12.98 11.18 9.11 }",
+     "{ 13.98 12.15 9.67 }"
+    ]
+   },
+   {
+    "label": "ab160_gw_2",
+    "variant": "broadcaster+gateway_pool",
+    "new_runs_per_s": 160,
+    "started_local": "19:18:52",
+    "scheduled_runs": 9600,
+    "accepted_scores": 9600,
+    "elapsed_s": 70.3,
+    "results": {
+     "leaderboard": {
+      "count": 702,
+      "p50Ms": 30.46,
+      "p95Ms": 56.137,
+      "p99Ms": 63.565,
+      "maxMs": 73.18,
+      "status": {
+       "200": 702
+      },
+      "errors": 0
+     },
+     "live_rank_frame": {
+      "count": 9600,
+      "p50Ms": 97.715,
+      "p95Ms": 151.26,
+      "p99Ms": 171.921,
+      "maxMs": 248.667,
+      "errors": 0
+     },
+     "score": {
+      "count": 9600,
+      "p50Ms": 78.606,
+      "p95Ms": 130.673,
+      "p99Ms": 151.534,
+      "maxMs": 221.269,
+      "status": {
+       "200": 9600
+      },
+      "errors": 0
+     },
+     "session": {
+      "count": 9600,
+      "p50Ms": 7.498,
+      "p95Ms": 35.624,
+      "p99Ms": 45.104,
+      "maxMs": 71.119,
+      "status": {
+       "200": 9600
+      },
+      "errors": 0
+     },
+     "start_lag": {
+      "count": 9600,
+      "p50Ms": 0.061,
+      "p95Ms": 1.561,
+      "p99Ms": 4.135,
+      "maxMs": 10.308,
+      "errors": 0
+     }
+    },
+    "sql_after": {
+     "run_attempts": 9600,
+     "scores": 9600,
+     "rejections": 0,
+     "outbox_rows": 9600,
+     "outbox_unpublished": 0,
+     "processed_events": 9600,
+     "daily_accepted_sum": 9600
+    },
+    "redis_board_members_after": 9600,
+    "watcher_frames": 86979,
+    "process_cpu_pct": {
+     "session-svc": {
+      "avg_pct": 3,
+      "peak_2s_pct": 9
+     },
+     "score-svc": {
+      "avg_pct": 9,
+      "peak_2s_pct": 14
+     },
+     "leaderboard-svc": {
+      "avg_pct": 88,
+      "peak_2s_pct": 111
+     },
+     "gateway": {
+      "avg_pct": 111,
+      "peak_2s_pct": 141
+     },
+     "outbox-publisher": {
+      "avg_pct": 2,
+      "peak_2s_pct": 5
+     },
+     "stats-worker": {
+      "avg_pct": 2,
+      "peak_2s_pct": 13
+     },
+     "load-probe": {
+      "avg_pct": 84,
+      "peak_2s_pct": 107
+     },
+     "docker_desktop_backend": {
+      "avg_pct": 27,
+      "peak_2s_pct": 32
+     },
+     "docker_vm": {
+      "avg_pct": 75,
+      "peak_2s_pct": 102
+     }
+    },
+    "container_cpu_pct_docker_stats": {
+     "p11sat-redis": {
+      "avg_pct": 12,
+      "peak_pct": 116,
+      "samples": 21
+     },
+     "p11sat-kafka": {
+      "avg_pct": 13,
+      "peak_pct": 29,
+      "samples": 21
+     }
+    },
+    "redis_commands_total": 2751715,
+    "redis_connected_clients_mid": 101,
+    "redis_pubsub_clients_mid": 1,
+    "redis_slowlog_entries_over_1ms": 7,
+    "gateway_proxy_errors": {},
+    "host_tcp_mid": {
+     "ESTABLISHED port 16379": 200,
+     "ESTABLISHED port 18080": 3503,
+     "ESTABLISHED port 18081": 24,
+     "ESTABLISHED port 18082": 68,
+     "ESTABLISHED port 18083": 3416,
+     "TIME_WAIT port 18080": 4703,
+     "TIME_WAIT port 18083": 4768
+    },
+    "host_load_avg_first_last": [
+     "{ 11.78 11.75 9.57 }",
+     "{ 13.44 12.41 10.07 }"
+    ]
+   },
+   {
+    "label": "ab160_fix_3",
+    "variant": "broadcaster",
+    "new_runs_per_s": 160,
+    "started_local": "19:20:44",
+    "scheduled_runs": 9600,
+    "accepted_scores": 7671,
+    "elapsed_s": 70.3,
+    "results": {
+     "leaderboard": {
+      "count": 702,
+      "p50Ms": 25.906,
+      "p95Ms": 61.288,
+      "p99Ms": 106.187,
+      "maxMs": 339.141,
+      "status": {
+       "200": 701,
+       "502": 1
+      },
+      "errors": 0
+     },
+     "live_connect": {
+      "count": 0,
+      "p50Ms": 0,
+      "p95Ms": 0,
+      "p99Ms": 0,
+      "maxMs": 0,
+      "errors": 1064
+     },
+     "live_rank_frame": {
+      "count": 7671,
+      "p50Ms": 108.947,
+      "p95Ms": 177.492,
+      "p99Ms": 290.817,
+      "maxMs": 526.563,
+      "errors": 0
+     },
+     "score": {
+      "count": 8520,
+      "p50Ms": 85.403,
+      "p95Ms": 154.466,
+      "p99Ms": 258.141,
+      "maxMs": 501.425,
+      "status": {
+       "200": 7671,
+       "502": 849
+      },
+      "errors": 0
+     },
+     "session": {
+      "count": 8536,
+      "p50Ms": 9.431,
+      "p95Ms": 41.123,
+      "p99Ms": 56.737,
+      "maxMs": 398.013,
+      "status": {
+       "200": 8520,
+       "502": 16
+      },
+      "errors": 0
+     },
+     "start_lag": {
+      "count": 9600,
+      "p50Ms": 0.079,
+      "p95Ms": 1.584,
+      "p99Ms": 5.643,
+      "maxMs": 294.387,
+      "errors": 0
+     }
+    },
+    "sql_after": {
+     "run_attempts": 7671,
+     "scores": 7671,
+     "rejections": 0,
+     "outbox_rows": 7671,
+     "outbox_unpublished": 0,
+     "processed_events": 7671,
+     "daily_accepted_sum": 7671
+    },
+    "redis_board_members_after": 7671,
+    "watcher_frames": 90558,
+    "process_cpu_pct": {
+     "session-svc": {
+      "avg_pct": 4,
+      "peak_2s_pct": 9
+     },
+     "score-svc": {
+      "avg_pct": 8,
+      "peak_2s_pct": 14
+     },
+     "leaderboard-svc": {
+      "avg_pct": 76,
+      "peak_2s_pct": 108
+     },
+     "gateway": {
+      "avg_pct": 100,
+      "peak_2s_pct": 136
+     },
+     "outbox-publisher": {
+      "avg_pct": 2,
+      "peak_2s_pct": 5
+     },
+     "stats-worker": {
+      "avg_pct": 4,
+      "peak_2s_pct": 23
+     },
+     "load-probe": {
+      "avg_pct": 72,
+      "peak_2s_pct": 99
+     },
+     "docker_desktop_backend": {
+      "avg_pct": 26,
+      "peak_2s_pct": 38
+     },
+     "docker_vm": {
+      "avg_pct": 78,
+      "peak_2s_pct": 145
+     }
+    },
+    "container_cpu_pct_docker_stats": {
+     "p11sat-redis": {
+      "avg_pct": 8,
+      "peak_pct": 12,
+      "samples": 17
+     },
+     "p11sat-kafka": {
+      "avg_pct": 16,
+      "peak_pct": 73,
+      "samples": 17
+     }
+    },
+    "redis_commands_total": 2368729,
+    "redis_connected_clients_mid": 108,
+    "redis_pubsub_clients_mid": 1,
+    "redis_slowlog_entries_over_1ms": 7,
+    "gateway_proxy_errors": {
+     "dial tcp ADDR: connect: can't assign requested address": 1426
+    },
+    "host_tcp_mid": {
+     "ESTABLISHED port 16379": 214,
+     "ESTABLISHED port 18080": 2026,
+     "ESTABLISHED port 18083": 1872,
+     "TIME_WAIT port 18080": 4642,
+     "TIME_WAIT port 18081": 2239,
+     "TIME_WAIT port 18082": 2536,
+     "TIME_WAIT port 18083": 4798
+    },
+    "host_load_avg_first_last": [
+     "{ 11.38 11.99 9.97 }",
+     "{ 12.03 11.95 10.11 }"
+    ]
+   },
+   {
+    "label": "ab160_gw_4",
+    "variant": "broadcaster+gateway_pool",
+    "new_runs_per_s": 160,
+    "started_local": "19:22:20",
+    "scheduled_runs": 9600,
+    "accepted_scores": 9600,
+    "elapsed_s": 70.3,
+    "results": {
+     "leaderboard": {
+      "count": 702,
+      "p50Ms": 28.743,
+      "p95Ms": 56.647,
+      "p99Ms": 69.71,
+      "maxMs": 101.55,
+      "status": {
+       "200": 702
+      },
+      "errors": 0
+     },
+     "live_rank_frame": {
+      "count": 9600,
+      "p50Ms": 93.1,
+      "p95Ms": 154.459,
+      "p99Ms": 204.073,
+      "maxMs": 274.756,
+      "errors": 0
+     },
+     "score": {
+      "count": 9600,
+      "p50Ms": 72.87,
+      "p95Ms": 136.562,
+      "p99Ms": 181.076,
+      "maxMs": 271.516,
+      "status": {
+       "200": 9600
+      },
+      "errors": 0
+     },
+     "session": {
+      "count": 9600,
+      "p50Ms": 4.619,
+      "p95Ms": 35.832,
+      "p99Ms": 45.236,
+      "maxMs": 100.081,
+      "status": {
+       "200": 9600
+      },
+      "errors": 0
+     },
+     "start_lag": {
+      "count": 9600,
+      "p50Ms": 0.066,
+      "p95Ms": 1.991,
+      "p99Ms": 5.017,
+      "maxMs": 60.345,
+      "errors": 0
+     }
+    },
+    "sql_after": {
+     "run_attempts": 9600,
+     "scores": 9600,
+     "rejections": 0,
+     "outbox_rows": 9600,
+     "outbox_unpublished": 0,
+     "processed_events": 9600,
+     "daily_accepted_sum": 9600
+    },
+    "redis_board_members_after": 9600,
+    "watcher_frames": 85457,
+    "process_cpu_pct": {
+     "session-svc": {
+      "avg_pct": 3,
+      "peak_2s_pct": 9
+     },
+     "score-svc": {
+      "avg_pct": 10,
+      "peak_2s_pct": 13
+     },
+     "leaderboard-svc": {
+      "avg_pct": 87,
+      "peak_2s_pct": 108
+     },
+     "gateway": {
+      "avg_pct": 110,
+      "peak_2s_pct": 134
+     },
+     "outbox-publisher": {
+      "avg_pct": 2,
+      "peak_2s_pct": 5
+     },
+     "stats-worker": {
+      "avg_pct": 2,
+      "peak_2s_pct": 12
+     },
+     "load-probe": {
+      "avg_pct": 83,
+      "peak_2s_pct": 105
+     },
+     "docker_desktop_backend": {
+      "avg_pct": 27,
+      "peak_2s_pct": 33
+     },
+     "docker_vm": {
+      "avg_pct": 75,
+      "peak_2s_pct": 111
+     }
+    },
+    "container_cpu_pct_docker_stats": {
+     "p11sat-redis": {
+      "avg_pct": 8,
+      "peak_pct": 12,
+      "samples": 20
+     },
+     "p11sat-kafka": {
+      "avg_pct": 21,
+      "peak_pct": 67,
+      "samples": 20
+     }
+    },
+    "redis_commands_total": 2715431,
+    "redis_connected_clients_mid": 100,
+    "redis_pubsub_clients_mid": 1,
+    "redis_slowlog_entries_over_1ms": 5,
+    "gateway_proxy_errors": {},
+    "host_tcp_mid": {
+     "ESTABLISHED port 16379": 198,
+     "ESTABLISHED port 18080": 3514,
+     "ESTABLISHED port 18081": 24,
+     "ESTABLISHED port 18082": 54,
+     "ESTABLISHED port 18083": 3431,
+     "TIME_WAIT port 18080": 4738,
+     "TIME_WAIT port 18083": 4765
+    },
+    "host_load_avg_first_last": [
+     "{ 9.10 11.29 9.92 }",
+     "{ 8.91 10.57 9.78 }"
+    ]
+   }
+  ]
+ },
+ "both_fixes_profile_2026_10_22": [
+  {
+   "label": "gw200",
+   "variant": "broadcaster+gateway_pool",
+   "new_runs_per_s": 200,
+   "started_local": "19:24:11",
+   "scheduled_runs": 12000,
+   "accepted_scores": 7656,
+   "elapsed_s": 70.3,
+   "results": {
+    "leaderboard": {
+     "count": 690,
+     "p50Ms": 52.147,
+     "p95Ms": 146.105,
+     "p99Ms": 811.151,
+     "maxMs": 1453.071,
+     "status": {
+      "200": 690
+     },
+     "errors": 13
+    },
+    "live_connect": {
+     "count": 0,
+     "p50Ms": 0,
+     "p95Ms": 0,
+     "p99Ms": 0,
+     "maxMs": 0,
+     "errors": 1870
+    },
+    "live_rank_frame": {
+     "count": 7656,
+     "p50Ms": 2291.383,
+     "p95Ms": 9597.126,
+     "p99Ms": 10003.254,
+     "maxMs": 10222.06,
+     "errors": 0
+    },
+    "score": {
+     "count": 8883,
+     "p50Ms": 2187.312,
+     "p95Ms": 9470.933,
+     "p99Ms": 9968.526,
+     "maxMs": 9999.385,
+     "status": {
+      "200": 7656,
+      "502": 538,
+      "503": 689
+     },
+     "errors": 1196
+    },
+    "session": {
+     "count": 10079,
+     "p50Ms": 27.377,
+     "p95Ms": 74.004,
+     "p99Ms": 91.229,
+     "maxMs": 454.717,
+     "status": {
+      "200": 10079
+     },
+     "errors": 51
+    },
+    "start_lag": {
+     "count": 12000,
+     "p50Ms": 0.07,
+     "p95Ms": 1.941,
+     "p99Ms": 6.923,
+     "maxMs": 89.961,
+     "errors": 0
+    }
+   },
+   "sql_after": {
+    "run_attempts": 7801,
+    "scores": 7801,
+    "rejections": 0,
+    "outbox_rows": 7801,
+    "outbox_unpublished": 0,
+    "processed_events": 7801,
+    "daily_accepted_sum": 7801
+   },
+   "redis_board_members_after": 7801,
+   "watcher_frames": 57300,
+   "process_cpu_pct": {
+    "session-svc": {
+     "avg_pct": 3,
+     "peak_2s_pct": 9
+    },
+    "score-svc": {
+     "avg_pct": 10,
+     "peak_2s_pct": 40
+    },
+    "leaderboard-svc": {
+     "avg_pct": 75,
+     "peak_2s_pct": 108
+    },
+    "gateway": {
+     "avg_pct": 97,
+     "peak_2s_pct": 133
+    },
+    "outbox-publisher": {
+     "avg_pct": 1,
+     "peak_2s_pct": 4
+    },
+    "stats-worker": {
+     "avg_pct": 2,
+     "peak_2s_pct": 20
+    },
+    "load-probe": {
+     "avg_pct": 74,
+     "peak_2s_pct": 100
+    },
+    "docker_desktop_backend": {
+     "avg_pct": 25,
+     "peak_2s_pct": 33
+    },
+    "docker_vm": {
+     "avg_pct": 69,
+     "peak_2s_pct": 112
+    }
+   },
+   "container_cpu_pct_docker_stats": {
+    "p11sat-redis": {
+     "avg_pct": 7,
+     "peak_pct": 11,
+     "samples": 21
+    },
+    "p11sat-kafka": {
+     "avg_pct": 12,
+     "peak_pct": 27,
+     "samples": 21
+    }
+   },
+   "redis_commands_total": 2284399,
+   "redis_connected_clients_mid": 181,
+   "redis_pubsub_clients_mid": 1,
+   "redis_slowlog_entries_over_1ms": 12,
+   "gateway_proxy_errors": {
+    "dial tcp ADDR: connect: can't assign requested address": 1094,
+    "context canceled": 793
+   },
+   "host_tcp_mid": {
+    "ESTABLISHED port 16379": 360,
+    "ESTABLISHED port 18080": 6833,
+    "ESTABLISHED port 18081": 76,
+    "ESTABLISHED port 18082": 2455,
+    "ESTABLISHED port 18083": 4324,
+    "TIME_WAIT port 18080": 4394,
+    "TIME_WAIT port 18083": 4702
+   },
+   "host_load_avg_first_last": [
+    "{ 8.36 10.37 9.72 }",
+    "{ 6.33 9.23 9.35 }"
+   ]
+  },
+  {
+   "label": "gw240",
+   "variant": "broadcaster+gateway_pool",
+   "new_runs_per_s": 240,
+   "started_local": "19:26:02",
+   "scheduled_runs": 14401,
+   "accepted_scores": 6051,
+   "elapsed_s": 70.3,
+   "results": {
+    "leaderboard": {
+     "count": 691,
+     "p50Ms": 42.276,
+     "p95Ms": 315.07,
+     "p99Ms": 1308.989,
+     "maxMs": 1840.949,
+     "status": {
+      "200": 689,
+      "502": 2
+     },
+     "errors": 11
+    },
+    "live_connect": {
+     "count": 0,
+     "p50Ms": 0,
+     "p95Ms": 0,
+     "p99Ms": 0,
+     "maxMs": 0,
+     "errors": 4800
+    },
+    "live_rank_frame": {
+     "count": 6051,
+     "p50Ms": 3025.91,
+     "p95Ms": 9457.328,
+     "p99Ms": 10034.38,
+     "maxMs": 10234.878,
+     "errors": 0
+    },
+    "score": {
+     "count": 7389,
+     "p50Ms": 2554.466,
+     "p95Ms": 9391.019,
+     "p99Ms": 9960.205,
+     "maxMs": 10005.056,
+     "status": {
+      "200": 6051,
+      "502": 778,
+      "503": 560
+     },
+     "errors": 2122
+    },
+    "session": {
+     "count": 9532,
+     "p50Ms": 19.891,
+     "p95Ms": 151.309,
+     "p99Ms": 358.198,
+     "maxMs": 1468.154,
+     "status": {
+      "200": 9511,
+      "502": 21
+     },
+     "errors": 69
+    },
+    "start_lag": {
+     "count": 14401,
+     "p50Ms": 0.073,
+     "p95Ms": 1.109,
+     "p99Ms": 4.628,
+     "maxMs": 41.617,
+     "errors": 0
+    }
+   },
+   "sql_after": {
+    "run_attempts": 6177,
+    "scores": 6177,
+    "rejections": 0,
+    "outbox_rows": 6177,
+    "outbox_unpublished": 0,
+    "processed_events": 6177,
+    "daily_accepted_sum": 6177
+   },
+   "redis_board_members_after": 6177,
+   "watcher_frames": 54350,
+   "process_cpu_pct": {
+    "session-svc": {
+     "avg_pct": 3,
+     "peak_2s_pct": 9
+    },
+    "score-svc": {
+     "avg_pct": 9,
+     "peak_2s_pct": 21
+    },
+    "leaderboard-svc": {
+     "avg_pct": 60,
+     "peak_2s_pct": 103
+    },
+    "gateway": {
+     "avg_pct": 83,
+     "peak_2s_pct": 125
+    },
+    "outbox-publisher": {
+     "avg_pct": 2,
+     "peak_2s_pct": 4
+    },
+    "stats-worker": {
+     "avg_pct": 4,
+     "peak_2s_pct": 17
+    },
+    "load-probe": {
+     "avg_pct": 61,
+     "peak_2s_pct": 94
+    },
+    "docker_desktop_backend": {
+     "avg_pct": 25,
+     "peak_2s_pct": 38
+    },
+    "docker_vm": {
+     "avg_pct": 73,
+     "peak_2s_pct": 115
+    }
+   },
+   "container_cpu_pct_docker_stats": {
+    "p11sat-redis": {
+     "avg_pct": 7,
+     "peak_pct": 11,
+     "samples": 17
+    },
+    "p11sat-kafka": {
+     "avg_pct": 15,
+     "peak_pct": 54,
+     "samples": 17
+    }
+   },
+   "redis_commands_total": 1736486,
+   "redis_connected_clients_mid": 330,
+   "redis_pubsub_clients_mid": 1,
+   "redis_slowlog_entries_over_1ms": 6,
+   "gateway_proxy_errors": {
+    "dial tcp ADDR: connect: can't assign requested address": 2604,
+    "context canceled": 1627
+   },
+   "host_tcp_mid": {
+    "ESTABLISHED port 16379": 658,
+    "ESTABLISHED port 18080": 6152,
+    "ESTABLISHED port 18081": 438,
+    "ESTABLISHED port 18082": 1956,
+    "ESTABLISHED port 18083": 3600,
+    "TIME_WAIT port 18080": 4044,
+    "TIME_WAIT port 18081": 27,
+    "TIME_WAIT port 18082": 287,
+    "TIME_WAIT port 18083": 5536
+   },
+   "host_load_avg_first_last": [
+    "{ 6.14 9.05 9.28 }",
+    "{ 7.24 8.70 9.12 }"
+   ]
+  },
+  {
+   "label": "gw280",
+   "variant": "broadcaster+gateway_pool",
+   "new_runs_per_s": 280,
+   "started_local": "19:27:34",
+   "scheduled_runs": 16801,
+   "accepted_scores": 4913,
+   "elapsed_s": 70.3,
+   "results": {
+    "leaderboard": {
+     "count": 616,
+     "p50Ms": 27.988,
+     "p95Ms": 836.75,
+     "p99Ms": 4592.76,
+     "maxMs": 8457.063,
+     "status": {
+      "200": 613,
+      "502": 3
+     },
+     "errors": 86
+    },
+    "live_connect": {
+     "count": 0,
+     "p50Ms": 0,
+     "p95Ms": 0,
+     "p99Ms": 0,
+     "maxMs": 0,
+     "errors": 6101
+    },
+    "live_rank_frame": {
+     "count": 4913,
+     "p50Ms": 1225.089,
+     "p95Ms": 6299.41,
+     "p99Ms": 9413.563,
+     "maxMs": 9968.392,
+     "errors": 0
+    },
+    "score": {
+     "count": 5835,
+     "p50Ms": 893.004,
+     "p95Ms": 6061.068,
+     "p99Ms": 9326.976,
+     "maxMs": 9975.231,
+     "status": {
+      "200": 4913,
+      "502": 922
+     },
+     "errors": 4771
+    },
+    "session": {
+     "count": 10606,
+     "p50Ms": 2.45,
+     "p95Ms": 135.322,
+     "p99Ms": 287.611,
+     "maxMs": 7840.654,
+     "status": {
+      "200": 10606
+     },
+     "errors": 94
+    },
+    "start_lag": {
+     "count": 16801,
+     "p50Ms": 0.097,
+     "p95Ms": 1.985,
+     "p99Ms": 9.195,
+     "maxMs": 65.089,
+     "errors": 0
+    },
+    "watcher_dropped": {
+     "count": 0,
+     "p50Ms": 0,
+     "p95Ms": 0,
+     "p99Ms": 0,
+     "maxMs": 0,
+     "errors": 5
+    }
+   },
+   "sql_after": {
+    "run_attempts": 4928,
+    "scores": 4928,
+    "rejections": 0,
+    "outbox_rows": 4928,
+    "outbox_unpublished": 0,
+    "processed_events": 4928,
+    "daily_accepted_sum": 4928
+   },
+   "redis_board_members_after": 4928,
+   "watcher_frames": 36192,
+   "process_cpu_pct": {
+    "session-svc": {
+     "avg_pct": 4,
+     "peak_2s_pct": 9
+    },
+    "score-svc": {
+     "avg_pct": 7,
+     "peak_2s_pct": 24
+    },
+    "leaderboard-svc": {
+     "avg_pct": 48,
+     "peak_2s_pct": 111
+    },
+    "gateway": {
+     "avg_pct": 63,
+     "peak_2s_pct": 143
+    },
+    "outbox-publisher": {
+     "avg_pct": 1,
+     "peak_2s_pct": 5
+    },
+    "stats-worker": {
+     "avg_pct": 3,
+     "peak_2s_pct": 16
+    },
+    "load-probe": {
+     "avg_pct": 58,
+     "peak_2s_pct": 108
+    },
+    "docker_desktop_backend": {
+     "avg_pct": 23,
+     "peak_2s_pct": 40
+    },
+    "docker_vm": {
+     "avg_pct": 69,
+     "peak_2s_pct": 135
+    }
+   },
+   "container_cpu_pct_docker_stats": {
+    "p11sat-redis": {
+     "avg_pct": 7,
+     "peak_pct": 13,
+     "samples": 16
+    },
+    "p11sat-kafka": {
+     "avg_pct": 12,
+     "peak_pct": 23,
+     "samples": 16
+    }
+   },
+   "redis_commands_total": 1244002,
+   "redis_connected_clients_mid": 314,
+   "redis_pubsub_clients_mid": 1,
+   "redis_slowlog_entries_over_1ms": 18,
+   "gateway_proxy_errors": {
+    "dial tcp ADDR: connect: can't assign requested address": 1823,
+    "context canceled": 2034,
+    "read tcp ADDR->ADDR: read: connection reset by peer": 50
+   },
+   "host_tcp_mid": {
+    "ESTABLISHED port 16379": 626,
+    "ESTABLISHED port 18080": 6355,
+    "ESTABLISHED port 18081": 316,
+    "ESTABLISHED port 18082": 512,
+    "ESTABLISHED port 18083": 5252,
+    "TIME_WAIT port 18080": 3794,
+    "TIME_WAIT port 18081": 59,
+    "TIME_WAIT port 18082": 105,
+    "TIME_WAIT port 18083": 5874
+   },
+   "host_load_avg_first_last": [
+    "{ 6.01 8.35 8.99 }",
+    "{ 8.40 8.93 9.18 }"
+   ]
+  }
+ ],
+ "final_ab_80_per_s_2026_10_23": {
+  "order": "base, broadcaster+gateway_pool, base, broadcaster+gateway_pool; each on a fresh stack with its own lock hold; binaries rebuilt from a temporary worktree at the previous version and from the final tree, byte-identical to the 22 October builds",
+  "conditions": "the laptop was on battery (29% falling to 25%) with Low Power Mode on; each run was wrapped in caffeinate -i to stop idle sleep",
+  "runs": [
+   {
+    "label": "d23b_base_1",
+    "variant": "base",
+    "new_runs_per_s": 80,
+    "started_local": "08:59:38",
+    "scheduled_runs": 4800,
+    "accepted_scores": 4800,
+    "elapsed_s": 70.4,
+    "results": {
+     "leaderboard": {
+      "count": 704,
+      "p50Ms": 119.352,
+      "p95Ms": 225.439,
+      "p99Ms": 293.465,
+      "maxMs": 346.769,
+      "status": {
+       "200": 704
+      },
+      "errors": 0
+     },
+     "live_rank_frame": {
+      "count": 4800,
+      "p50Ms": 145.701,
+      "p95Ms": 302.497,
+      "p99Ms": 391.271,
+      "maxMs": 525.484,
+      "errors": 0
+     },
+     "score": {
+      "count": 4800,
+      "p50Ms": 66.673,
+      "p95Ms": 130.496,
+      "p99Ms": 186.261,
+      "maxMs": 242.996,
+      "status": {
+       "200": 4800
+      },
+      "errors": 0
+     },
+     "session": {
+      "count": 4800,
+      "p50Ms": 8.15,
+      "p95Ms": 30.521,
+      "p99Ms": 43.174,
+      "maxMs": 112.038,
+      "status": {
+       "200": 4800
+      },
+      "errors": 0
+     },
+     "start_lag": {
+      "count": 4800,
+      "p50Ms": 0.205,
+      "p95Ms": 1.026,
+      "p99Ms": 2.159,
+      "maxMs": 6.903,
+      "errors": 0
+     }
+    },
+    "sql_after": {
+     "run_attempts": 4800,
+     "scores": 4800,
+     "rejections": 0,
+     "outbox_rows": 4800,
+     "outbox_unpublished": 0,
+     "processed_events": 4800,
+     "daily_accepted_sum": 4800
+    },
+    "redis_board_members_after": 4800,
+    "watcher_frames": 34231,
+    "process_cpu_pct": {
+     "session-svc": {
+      "avg_pct": 3,
+      "peak_2s_pct": 6
+     },
+     "score-svc": {
+      "avg_pct": 7,
+      "peak_2s_pct": 10
+     },
+     "leaderboard-svc": {
+      "avg_pct": 161,
+      "peak_2s_pct": 197
+     },
+     "gateway": {
+      "avg_pct": 27,
+      "peak_2s_pct": 37
+     },
+     "outbox-publisher": {
+      "avg_pct": 2,
+      "peak_2s_pct": 3
+     },
+     "stats-worker": {
+      "avg_pct": 2,
+      "peak_2s_pct": 6
+     },
+     "load-probe": {
+      "avg_pct": 22,
+      "peak_2s_pct": 32
+     },
+     "docker_vm": {
+      "avg_pct": 228,
+      "peak_2s_pct": 281
+     },
+     "docker_desktop_backend": {
+      "avg_pct": 196,
+      "peak_2s_pct": 240
+     }
+    },
+    "container_cpu_pct_docker_stats": {
+     "p11sat-redis": {
+      "avg_pct": 50,
+      "peak_pct": 89,
+      "samples": 16
+     },
+     "p11sat-kafka": {
+      "avg_pct": 29,
+      "peak_pct": 111,
+      "samples": 16
+     }
+    },
+    "redis_commands_total": 1720945,
+    "redis_connected_clients_mid": 1041,
+    "redis_pubsub_clients_mid": 896,
+    "redis_slowlog_entries_over_1ms": 128,
+    "gateway_proxy_errors": {},
+    "host_tcp_mid": {
+     "ESTABLISHED port 16379": 2064,
+     "ESTABLISHED port 18080": 1832,
+     "ESTABLISHED port 18083": 1784,
+     "TIME_WAIT port 16379": 1388,
+     "TIME_WAIT port 18080": 2379,
+     "TIME_WAIT port 18081": 317,
+     "TIME_WAIT port 18082": 902,
+     "TIME_WAIT port 18083": 2390
+    },
+    "host_load_avg_first_last": [
+     "{ 8.22 14.89 11.32 }",
+     "{ 20.81 16.94 12.35 }"
+    ]
+   },
+   {
+    "label": "d23b_fix_2",
+    "variant": "broadcaster+gateway_pool",
+    "new_runs_per_s": 80,
+    "started_local": "09:01:10",
+    "scheduled_runs": 4800,
+    "accepted_scores": 4800,
+    "elapsed_s": 70.2,
+    "results": {
+     "leaderboard": {
+      "count": 702,
+      "p50Ms": 10.543,
+      "p95Ms": 26.019,
+      "p99Ms": 30.2,
+      "maxMs": 43.954,
+      "status": {
+       "200": 702
+      },
+      "errors": 0
+     },
+     "live_rank_frame": {
+      "count": 4800,
+      "p50Ms": 34.824,
+      "p95Ms": 59.426,
+      "p99Ms": 67.805,
+      "maxMs": 114.152,
+      "errors": 0
+     },
+     "score": {
+      "count": 4800,
+      "p50Ms": 26.505,
+      "p95Ms": 48.655,
+      "p99Ms": 54.219,
+      "maxMs": 78.754,
+      "status": {
+       "200": 4800
+      },
+      "errors": 0
+     },
+     "session": {
+      "count": 4800,
+      "p50Ms": 1.779,
+      "p95Ms": 12.745,
+      "p99Ms": 17.062,
+      "maxMs": 34.015,
+      "status": {
+       "200": 4800
+      },
+      "errors": 0
+     },
+     "start_lag": {
+      "count": 4800,
+      "p50Ms": 0.076,
+      "p95Ms": 0.999,
+      "p99Ms": 2.409,
+      "maxMs": 16.539,
+      "errors": 0
+     }
+    },
+    "sql_after": {
+     "run_attempts": 4800,
+     "scores": 4800,
+     "rejections": 0,
+     "outbox_rows": 4800,
+     "outbox_unpublished": 0,
+     "processed_events": 4800,
+     "daily_accepted_sum": 4800
+    },
+    "redis_board_members_after": 4800,
+    "watcher_frames": 158593,
+    "process_cpu_pct": {
+     "session-svc": {
+      "avg_pct": 2,
+      "peak_2s_pct": 7
+     },
+     "score-svc": {
+      "avg_pct": 6,
+      "peak_2s_pct": 8
+     },
+     "leaderboard-svc": {
+      "avg_pct": 85,
+      "peak_2s_pct": 110
+     },
+     "gateway": {
+      "avg_pct": 110,
+      "peak_2s_pct": 139
+     },
+     "outbox-publisher": {
+      "avg_pct": 2,
+      "peak_2s_pct": 2
+     },
+     "stats-worker": {
+      "avg_pct": 4,
+      "peak_2s_pct": 18
+     },
+     "load-probe": {
+      "avg_pct": 81,
+      "peak_2s_pct": 103
+     },
+     "docker_vm": {
+      "avg_pct": 71,
+      "peak_2s_pct": 101
+     },
+     "docker_desktop_backend": {
+      "avg_pct": 25,
+      "peak_2s_pct": 31
+     }
+    },
+    "container_cpu_pct_docker_stats": {
+     "p11sat-redis": {
+      "avg_pct": 7,
+      "peak_pct": 11,
+      "samples": 16
+     },
+     "p11sat-kafka": {
+      "avg_pct": 13,
+      "peak_pct": 22,
+      "samples": 16
+     }
+    },
+    "redis_commands_total": 2520013,
+    "redis_connected_clients_mid": 70,
+    "redis_pubsub_clients_mid": 1,
+    "redis_slowlog_entries_over_1ms": 0,
+    "gateway_proxy_errors": {},
+    "host_tcp_mid": {
+     "ESTABLISHED port 16379": 138,
+     "ESTABLISHED port 18080": 1765,
+     "ESTABLISHED port 18083": 1748,
+     "TIME_WAIT port 18080": 2370,
+     "TIME_WAIT port 18083": 2390
+    },
+    "host_load_avg_first_last": [
+     "{ 15.29 15.94 12.10 }",
+     "{ 12.96 14.89 11.99 }"
+    ]
+   },
+   {
+    "label": "d23b_base_3",
+    "variant": "base",
+    "new_runs_per_s": 80,
+    "started_local": "09:02:38",
+    "scheduled_runs": 4800,
+    "accepted_scores": 4800,
+    "elapsed_s": 70.4,
+    "results": {
+     "leaderboard": {
+      "count": 704,
+      "p50Ms": 116.857,
+      "p95Ms": 225.158,
+      "p99Ms": 276.86,
+      "maxMs": 357.453,
+      "status": {
+       "200": 704
+      },
+      "errors": 0
+     },
+     "live_rank_frame": {
+      "count": 4800,
+      "p50Ms": 145.947,
+      "p95Ms": 302.355,
+      "p99Ms": 382.482,
+      "maxMs": 572.722,
+      "errors": 0
+     },
+     "score": {
+      "count": 4800,
+      "p50Ms": 67.789,
+      "p95Ms": 131.073,
+      "p99Ms": 163.541,
+      "maxMs": 219.358,
+      "status": {
+       "200": 4800
+      },
+      "errors": 0
+     },
+     "session": {
+      "count": 4800,
+      "p50Ms": 8.51,
+      "p95Ms": 30.323,
+      "p99Ms": 39.958,
+      "maxMs": 72.45,
+      "status": {
+       "200": 4800
+      },
+      "errors": 0
+     },
+     "start_lag": {
+      "count": 4800,
+      "p50Ms": 0.198,
+      "p95Ms": 1.048,
+      "p99Ms": 2.396,
+      "maxMs": 11.856,
+      "errors": 0
+     }
+    },
+    "sql_after": {
+     "run_attempts": 4800,
+     "scores": 4800,
+     "rejections": 0,
+     "outbox_rows": 4800,
+     "outbox_unpublished": 0,
+     "processed_events": 4800,
+     "daily_accepted_sum": 4800
+    },
+    "redis_board_members_after": 4800,
+    "watcher_frames": 35803,
+    "process_cpu_pct": {
+     "session-svc": {
+      "avg_pct": 3,
+      "peak_2s_pct": 6
+     },
+     "score-svc": {
+      "avg_pct": 7,
+      "peak_2s_pct": 10
+     },
+     "leaderboard-svc": {
+      "avg_pct": 163,
+      "peak_2s_pct": 198
+     },
+     "gateway": {
+      "avg_pct": 28,
+      "peak_2s_pct": 42
+     },
+     "outbox-publisher": {
+      "avg_pct": 2,
+      "peak_2s_pct": 3
+     },
+     "stats-worker": {
+      "avg_pct": 2,
+      "peak_2s_pct": 6
+     },
+     "load-probe": {
+      "avg_pct": 22,
+      "peak_2s_pct": 36
+     },
+     "docker_vm": {
+      "avg_pct": 231,
+      "peak_2s_pct": 301
+     },
+     "docker_desktop_backend": {
+      "avg_pct": 198,
+      "peak_2s_pct": 245
+     }
+    },
+    "container_cpu_pct_docker_stats": {
+     "p11sat-redis": {
+      "avg_pct": 48,
+      "peak_pct": 89,
+      "samples": 17
+     },
+     "p11sat-kafka": {
+      "avg_pct": 17,
+      "peak_pct": 48,
+      "samples": 17
+     }
+    },
+    "redis_commands_total": 1745827,
+    "redis_connected_clients_mid": 1042,
+    "redis_pubsub_clients_mid": 898,
+    "redis_slowlog_entries_over_1ms": 128,
+    "gateway_proxy_errors": {},
+    "host_tcp_mid": {
+     "ESTABLISHED port 16379": 2058,
+     "ESTABLISHED port 18080": 1834,
+     "ESTABLISHED port 18083": 1788,
+     "TIME_WAIT port 16379": 1419,
+     "TIME_WAIT port 18080": 2378,
+     "TIME_WAIT port 18081": 337,
+     "TIME_WAIT port 18082": 913,
+     "TIME_WAIT port 18083": 2384
+    },
+    "host_load_avg_first_last": [
+     "{ 10.67 14.29 11.82 }",
+     "{ 13.16 14.21 12.00 }"
+    ]
+   },
+   {
+    "label": "d23b_fix_4",
+    "variant": "broadcaster+gateway_pool",
+    "new_runs_per_s": 80,
+    "started_local": "09:04:09",
+    "scheduled_runs": 4800,
+    "accepted_scores": 4800,
+    "elapsed_s": 70.2,
+    "results": {
+     "leaderboard": {
+      "count": 702,
+      "p50Ms": 12.334,
+      "p95Ms": 25.924,
+      "p99Ms": 29.279,
+      "maxMs": 53.269,
+      "status": {
+       "200": 702
+      },
+      "errors": 0
+     },
+     "live_rank_frame": {
+      "count": 4800,
+      "p50Ms": 36.272,
+      "p95Ms": 59.423,
+      "p99Ms": 69.981,
+      "maxMs": 108.649,
+      "errors": 0
+     },
+     "score": {
+      "count": 4800,
+      "p50Ms": 28.021,
+      "p95Ms": 49.27,
+      "p99Ms": 55.45,
+      "maxMs": 89.63,
+      "status": {
+       "200": 4800
+      },
+      "errors": 0
+     },
+     "session": {
+      "count": 4800,
+      "p50Ms": 1.804,
+      "p95Ms": 13.539,
+      "p99Ms": 17.145,
+      "maxMs": 46.092,
+      "status": {
+       "200": 4800
+      },
+      "errors": 0
+     },
+     "start_lag": {
+      "count": 4800,
+      "p50Ms": 0.073,
+      "p95Ms": 1.019,
+      "p99Ms": 2.259,
+      "maxMs": 18.634,
+      "errors": 0
+     }
+    },
+    "sql_after": {
+     "run_attempts": 4800,
+     "scores": 4800,
+     "rejections": 0,
+     "outbox_rows": 4800,
+     "outbox_unpublished": 0,
+     "processed_events": 4800,
+     "daily_accepted_sum": 4800
+    },
+    "redis_board_members_after": 4800,
+    "watcher_frames": 158789,
+    "process_cpu_pct": {
+     "session-svc": {
+      "avg_pct": 2,
+      "peak_2s_pct": 7
+     },
+     "score-svc": {
+      "avg_pct": 6,
+      "peak_2s_pct": 9
+     },
+     "leaderboard-svc": {
+      "avg_pct": 86,
+      "peak_2s_pct": 110
+     },
+     "gateway": {
+      "avg_pct": 110,
+      "peak_2s_pct": 139
+     },
+     "outbox-publisher": {
+      "avg_pct": 2,
+      "peak_2s_pct": 2
+     },
+     "stats-worker": {
+      "avg_pct": 4,
+      "peak_2s_pct": 18
+     },
+     "load-probe": {
+      "avg_pct": 81,
+      "peak_2s_pct": 109
+     },
+     "docker_vm": {
+      "avg_pct": 71,
+      "peak_2s_pct": 88
+     },
+     "docker_desktop_backend": {
+      "avg_pct": 25,
+      "peak_2s_pct": 33
+     }
+    },
+    "container_cpu_pct_docker_stats": {
+     "p11sat-redis": {
+      "avg_pct": 8,
+      "peak_pct": 10,
+      "samples": 15
+     },
+     "p11sat-kafka": {
+      "avg_pct": 14,
+      "peak_pct": 26,
+      "samples": 15
+     }
+    },
+    "redis_commands_total": 2525088,
+    "redis_connected_clients_mid": 75,
+    "redis_pubsub_clients_mid": 1,
+    "redis_slowlog_entries_over_1ms": 0,
+    "gateway_proxy_errors": {},
+    "host_tcp_mid": {
+     "ESTABLISHED port 16379": 148,
+     "ESTABLISHED port 18080": 1768,
+     "ESTABLISHED port 18083": 1748,
+     "TIME_WAIT port 18080": 2381,
+     "TIME_WAIT port 18083": 2388
+    },
+    "host_load_avg_first_last": [
+     "{ 10.08 13.43 11.77 }",
+     "{ 11.81 13.16 11.79 }"
+    ]
+   }
+  ]
+ },
+ "discarded_ab_2026_10_23": "An earlier set at 80 a second the same morning (08:42-08:58) is not used. Its fourth run (broadcaster+gateway_pool) was disturbed: the laptop, on battery with a 1-minute idle-sleep setting, went to sleep mid-run and woke at 08:57:28, so 201 score requests arrived after their 120-second run tokens expired (401) and the probe's background sockets hung until wake. Its first three runs were normal (rank-frame p99 428 and 523 ms for base, 87 ms for the fix), but an A/B with one invalid run was discarded whole and rerun under caffeinate.",
+ "opt_in_redis_tests_2026_10_22": "TestRedisBoardRecoveryIntegration, TestRedisBoardPublishesOnlyChangesIntegration and the new TestRedisRanksIntegration passed against a disposable redis:7.4-alpine (7.4.11) DB 15; the DB was empty afterwards",
+ "unit_tests": {
+  "gateway_connection_reuse": "3 rounds of 16 concurrent requests through the proxy: http.DefaultTransport opened 44 upstream connections, upstreamTransport 16 (repeated 3 times)",
+  "broadcaster": "one Redis subscription and one board read per change for two sockets on one board; subscription closed with the last socket and reopened for the next; a slow socket keeps only the newest frame; the shared frame matches the old JSON exactly; ranks fall back to SQL without reading an unverified Redis board"
+ },
+ "limits": [
+  "One laptop, synthetic players, everything on loopback; not a capacity claim for any deployment.",
+  "Redis and Kafka ran behind Docker Desktop's port forwarding, which cost more CPU than Redis itself in the base runs.",
+  "The probe opens one socket per game from one host, so its own connections share the host's 16,384 ephemeral ports with the services' connections.",
+  "Steps are single runs; each A/B has two runs per variant."
+ ]
+}

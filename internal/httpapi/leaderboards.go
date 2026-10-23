@@ -62,22 +62,12 @@ func LeaderboardHandler(db BoardStore, cache BoardCache, now func() time.Time) h
 	return mux
 }
 
-// completeBoard is shared by the REST and live board routes. It reads Redis
-// only when the SQL backfill marker says the sorted set is complete, backfills
-// a partial or missing key first, and otherwise answers from SQL.
+// completeBoard is shared by the REST route and each live socket's initial
+// frame. It reads Redis only when the SQL backfill marker says the sorted set
+// is complete, backfills a partial or missing key first, and otherwise
+// answers from SQL.
 func completeBoard(ctx context.Context, db BoardStore, cache BoardCache, id game.ID, key string, since time.Time, user string) (store.Board, error) {
-	exists, cacheErr := cache.HasBoard(ctx, key)
-	if cacheErr == nil && !exists {
-		rows, dbErr := db.BestScores(ctx, id, since)
-		if dbErr == nil {
-			cacheErr = cache.Backfill(ctx, key, rows)
-		} else {
-			// The Redis key may contain only a recent score. Never read it
-			// as a complete board when SQL backfill could not finish.
-			cacheErr = dbErr
-		}
-	}
-	if cacheErr == nil {
+	if readyBoard(ctx, db, cache, id, key, since) == nil {
 		result, err := cache.Board(ctx, key, user)
 		if err == nil {
 			return result, nil
@@ -89,6 +79,51 @@ func completeBoard(ctx context.Context, db BoardStore, cache BoardCache, id game
 		return store.Board{}, err
 	}
 	return fromSQL(rows, user), nil
+}
+
+// completeBoardRanks is completeBoard for many players at once: the live
+// broadcaster reads the shared top 20 once and every watching player's rank
+// in one batch. The completeness rules are the same.
+func completeBoardRanks(ctx context.Context, db BoardStore, cache LiveCache, id game.ID, key string, since time.Time, users []string) (store.Board, map[string]int64, error) {
+	if readyBoard(ctx, db, cache, id, key, since) == nil {
+		board, err := cache.Board(ctx, key, "")
+		if err == nil {
+			ranks, err := cache.Ranks(ctx, key, users)
+			if err == nil {
+				return board, ranks, nil
+			}
+		}
+	}
+	rows, err := db.Leaderboard(ctx, id, since, "", 0)
+	if err != nil {
+		return store.Board{}, nil, err
+	}
+	wanted := make(map[string]bool, len(users))
+	for _, user := range users {
+		wanted[user] = true
+	}
+	ranks := make(map[string]int64, len(users))
+	for index, row := range rows {
+		if wanted[row.User] {
+			ranks[row.User] = int64(index + 1)
+		}
+	}
+	return fromSQL(rows, ""), ranks, nil
+}
+
+// readyBoard returns nil when the Redis board can be read as complete,
+// backfilling it from SQL first if needed. The Redis key may hold only a
+// recent score, so it is never trusted when the backfill could not finish.
+func readyBoard(ctx context.Context, db BoardStore, cache BoardCache, id game.ID, key string, since time.Time) error {
+	exists, err := cache.HasBoard(ctx, key)
+	if err != nil || exists {
+		return err
+	}
+	rows, err := db.BestScores(ctx, id, since)
+	if err != nil {
+		return err
+	}
+	return cache.Backfill(ctx, key, rows)
 }
 
 func fromSQL(rows []store.Score, user string) store.Board {

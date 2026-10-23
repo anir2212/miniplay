@@ -314,6 +314,9 @@ func main() {
 	scheduled := 0
 	for next := began; next.Before(began.Add(*duration)); next = next.Add(interval) {
 		time.Sleep(time.Until(next))
+		// How late each start is: a probe that cannot keep its own schedule
+		// would understate the load it claims to apply.
+		p.rec.add("start_lag", time.Since(next), 0)
 		runs.Add(1)
 		go func(index int) { defer runs.Done(); p.play(index, *prefix, *hits, *frameTimeout) }(scheduled)
 		scheduled++

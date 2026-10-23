@@ -5,11 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -89,7 +92,7 @@ func TestGatewayRealHTTPSessionToScoreFlowWithFakes(t *testing.T) {
 	defer sessions.Close()
 	scores := httptest.NewServer(httpapi.ScoreHandler(signer, db, testCache{}, func() int64 { return now.Add(10 * time.Second).UnixMilli() }))
 	defer scores.Close()
-	gateway := httptest.NewServer(newHandler(proxy(sessions.URL), proxy(scores.URL), http.NotFoundHandler(), t.TempDir()))
+	gateway := httptest.NewServer(newHandler(proxy(sessions.URL, upstreamTransport()), proxy(scores.URL, upstreamTransport()), http.NotFoundHandler(), t.TempDir()))
 	defer gateway.Close()
 	client := &http.Client{Timeout: 3 * time.Second}
 	post := func(path string, value any) *http.Response {
@@ -141,5 +144,56 @@ func TestGatewayRealHTTPSessionToScoreFlowWithFakes(t *testing.T) {
 	defer duplicate.Body.Close()
 	if duplicate.StatusCode != http.StatusConflict || len(db.used) != 1 {
 		t.Fatalf("duplicate status=%d stored runs=%d", duplicate.StatusCode, len(db.used))
+	}
+}
+
+// countUpstreamConnections sends rounds of concurrent requests through the
+// proxy and counts the TCP connections the upstream service accepts.
+func countUpstreamConnections(t *testing.T, transport http.RoundTripper) int64 {
+	t.Helper()
+	var opened atomic.Int64
+	upstream := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		time.Sleep(20 * time.Millisecond) // keep the requests in flight together
+		_, _ = w.Write([]byte("ok"))
+	}))
+	upstream.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateNew {
+			opened.Add(1)
+		}
+	}
+	upstream.Start()
+	defer upstream.Close()
+	front := httptest.NewServer(proxy(upstream.URL, transport))
+	defer front.Close()
+	clientTransport := http.DefaultTransport.(*http.Transport).Clone()
+	clientTransport.MaxIdleConnsPerHost = 64
+	client := &http.Client{Transport: clientTransport}
+	const concurrent, rounds = 16, 3
+	for round := 0; round < rounds; round++ {
+		var wg sync.WaitGroup
+		for i := 0; i < concurrent; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				response, err := client.Get(front.URL + "/api/sessions")
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				_, _ = io.Copy(io.Discard, response.Body)
+				response.Body.Close()
+			}()
+		}
+		wg.Wait()
+	}
+	return opened.Load()
+}
+
+func TestGatewayReusesUpstreamConnectionsUnderConcurrency(t *testing.T) {
+	// Three rounds of 16 concurrent requests need at most 16 connections when
+	// idle ones are kept. The default transport keeps two per host and opened
+	// about 44 in this test; each discarded one sits in TIME_WAIT.
+	if got := countUpstreamConnections(t, upstreamTransport()); got > 20 {
+		t.Fatalf("upstream accepted %d connections for 3 rounds of 16 concurrent requests; want at most 20", got)
 	}
 }

@@ -12,18 +12,33 @@ import (
 	"miniplay/internal/config"
 )
 
-func proxy(raw string) http.Handler {
+// upstreamTransport keeps enough idle connections to each service for
+// concurrent requests. http.DefaultTransport keeps only two per host, so under
+// load most proxied requests opened a new connection and left the old one in
+// TIME_WAIT. In the local profile at 160 new games a second that held about
+// 4,700 of the machine's 16,384 ephemeral ports.
+func upstreamTransport() *http.Transport {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.MaxIdleConns = 1024
+	transport.MaxIdleConnsPerHost = 256
+	return transport
+}
+
+func proxy(raw string, transport http.RoundTripper) http.Handler {
 	target, err := url.Parse(raw)
 	if err != nil {
 		log.Fatal(err)
 	}
-	return httputil.NewSingleHostReverseProxy(target)
+	handler := httputil.NewSingleHostReverseProxy(target)
+	handler.Transport = transport
+	return handler
 }
 
 func main() {
-	session := proxy(config.Env("SESSION_URL", "http://127.0.0.1:8081"))
-	score := proxy(config.Env("SCORE_URL", "http://127.0.0.1:8082"))
-	leaderboard := proxy(config.Env("LEADERBOARD_URL", "http://127.0.0.1:8083"))
+	upstream := upstreamTransport()
+	session := proxy(config.Env("SESSION_URL", "http://127.0.0.1:8081"), upstream)
+	score := proxy(config.Env("SCORE_URL", "http://127.0.0.1:8082"), upstream)
+	leaderboard := proxy(config.Env("LEADERBOARD_URL", "http://127.0.0.1:8083"), upstream)
 	webRoot := config.Env("WEB_DIST", "web/dist")
 	if err := config.Serve(config.LocalAddr("8080"), newHandler(session, score, leaderboard, webRoot)); err != nil {
 		log.Fatal(err)

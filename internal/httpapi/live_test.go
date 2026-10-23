@@ -36,6 +36,9 @@ func (c *liveCache) Board(context.Context, string, string) (store.Board, error) 
 	defer c.mu.Unlock()
 	return c.board, nil
 }
+func (c *liveCache) Ranks(context.Context, string, []string) (map[string]int64, error) {
+	return map[string]int64{}, nil
+}
 func (c *liveCache) SubscribeBoard(context.Context, string) (<-chan struct{}, func(), error) {
 	return c.updates, func() {}, nil
 }
