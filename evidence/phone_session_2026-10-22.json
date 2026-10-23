@@ -9,7 +9,8 @@
  },
  "app": {
   "build": "flutter build apk --debug --dart-define=MINIPLAY_URL=http://127.0.0.1:18080 --dart-define=MINIPLAY_USER=phone1 (Flutter 3.44.1)",
-  "note": "Debug build; plain HTTP works only because Flutter's Gradle plugin adds usesCleartextTraffic to debug builds."
+  "note": "Debug build; plain HTTP works only because Flutter's Gradle plugin adds usesCleartextTraffic to debug builds.",
+  "cleartext_correction": "Corrected 2026-10-23: usesCleartextTraffic=true came from the app's own main manifest, where it had been since M1; Flutter's Gradle plugin does not add it. Release builds therefore also allowed cleartext until 2026-10-23, when the attribute was replaced by a network security config that allows cleartext in debug builds only (see evidence/android_release_https_2026-10-24.json)."
  },
  "stack": "The disposable stack used for the load profile: PostgreSQL 18.6 on 127.0.0.1:55432, Redis 7.4.11 and Kafka 3.9.1 containers, the six Go services, the gateway on 127.0.0.1:18080 serving a fresh web/dist, and a new per-run secret that was not recorded.",
  "observations": [

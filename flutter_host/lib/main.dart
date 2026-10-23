@@ -64,6 +64,13 @@ class _GameScreenState extends State<GameScreen> {
           final userJson = jsonEncode(configuredUser);
           controller.runJavaScript('window.MiniPlayHost.configure({userId:$userJson});');
         },
+        onSslAuthError: (error) {
+          // Never proceed past a certificate the platform does not trust.
+          error.cancel();
+          if (mounted) {
+            setState(() => lastEvent = 'Could not load games: certificate rejected (${error.platform.description})');
+          }
+        },
         onWebResourceError: (error) {
           if (error.isForMainFrame == true && mounted) {
             setState(() => lastEvent = 'Could not load games: ${error.description}');

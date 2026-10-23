@@ -40,7 +40,23 @@ func main() {
 	score := proxy(config.Env("SCORE_URL", "http://127.0.0.1:8082"), upstream)
 	leaderboard := proxy(config.Env("LEADERBOARD_URL", "http://127.0.0.1:8083"), upstream)
 	webRoot := config.Env("WEB_DIST", "web/dist")
-	if err := config.Serve(config.LocalAddr("8080"), newHandler(session, score, leaderboard, webRoot)); err != nil {
+	handler := newHandler(session, score, leaderboard, webRoot)
+	// With MINIPLAY_TLS_CERT and MINIPLAY_TLS_KEY set, the gateway serves
+	// HTTPS only; the services behind it stay plain HTTP on loopback.
+	certFile, keyFile, err := config.TLSFiles()
+	if err != nil {
+		log.Fatal(err)
+	}
+	if certFile == "" {
+		err = config.Serve(config.LocalAddr("8080"), handler)
+	} else {
+		tlsConfig, tlsErr := config.TLSConfig(certFile, keyFile)
+		if tlsErr != nil {
+			log.Fatal(tlsErr)
+		}
+		err = config.ServeTLS(config.LocalAddr("8080"), handler, tlsConfig)
+	}
+	if err != nil {
 		log.Fatal(err)
 	}
 }

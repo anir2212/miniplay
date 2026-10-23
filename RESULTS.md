@@ -1,6 +1,6 @@
 # Measured results and acceptance
 
-Results below were collected locally on 2026-10-12, 2026-10-13, 2026-10-15, 2026-10-16, 2026-10-22 and 2026-10-23. Local load profiles were run on 2026-10-22, with a repeat A/B on 2026-10-23 (below); no GPU or cloud benchmark has been run.
+Results below were collected locally on 2026-10-12, 2026-10-13, 2026-10-15, 2026-10-16, 2026-10-22, 2026-10-23 and 2026-10-24. Local load profiles were run on 2026-10-22, with a repeat A/B on 2026-10-23 (below); no GPU or cloud benchmark has been run.
 
 | Check | Result | Command or evidence |
 |---|---:|---|
@@ -23,6 +23,41 @@ Results below were collected locally on 2026-10-12, 2026-10-13, 2026-10-15, 2026
 | Redis board completeness change | Full Go suite and vet passed. A live Redis 7 test passed partial-key detection, SQL backfill merge, lower-score retry, eviction recovery, and empty-marker invalidation/TTL in 0.03 s | `MINIPLAY_TEST_REDIS_URL=redis://127.0.0.1:16379/15 ... go test ./internal/store -run '^TestRedisBoardRecoveryIntegration$' -count=1 -v` against an isolated `redis:7-alpine` container (2026-10-16). Container stopped and removed. |
 | Incomplete-board fallback | Two focused handler cases passed: failed backfill falls back to a complete SQL answer; when SQL also fails, returns 503 without reading the partial Redis board | `go test ./internal/httpapi -run TestLeaderboardBackfillFailureDoesNotServePartialCache -count=1 -v` (2026-10-16); fake dependencies |
 | OpenAPI document structure | Parsed five public paths and resolved all 43 local `$ref` targets | Ruby YAML parser and local-reference walk on `api/openapi.yaml` (2026-10-16); no live contract test |
+
+## HTTPS release build on the Android emulator, 23–24 October 2026
+
+The release builds were made on 23 October, and the device session ran on a fresh disposable stack between 01:12 and 01:16 on 24 October. The workspace's shared CPU lock was held for each build and for the stack and emulator session. Evidence, with no keys, passwords, tokens or secret: [`evidence/android_release_https_2026-10-24.json`](evidence/android_release_https_2026-10-24.json), with four screenshots in `evidence/android_release_2026-10-24/`.
+
+**What changed first.**
+- *The gateway can serve HTTPS.* With `MINIPLAY_TLS_CERT` and `MINIPLAY_TLS_KEY` set, it serves TLS 1.2 or later only ([`internal/config/config.go`](internal/config/config.go), [`cmd/gateway/main.go`](cmd/gateway/main.go)). The services behind it stay plain HTTP on loopback.
+- *The release app no longer allows cleartext.* Since M1 the app's main manifest had `android:usesCleartextTraffic="true"`, so every build, release included, allowed plain HTTP. The 22 October notes said Flutter's Gradle plugin added it to debug builds only; that was wrong. Each build type now has a network security config:
+  - debug allows cleartext;
+  - release and profile refuse cleartext and trust system CAs only;
+  - a new non-production `localRelease` build type also trusts one local CA, only for `10.0.2.2`, `127.0.0.1` and `localhost`.
+- *Release signing reads an upload key from outside the repository.* Gradle takes it from an untracked properties file or environment variables, and a release task without one stops instead of signing with the debug key. The host now cancels any certificate error and shows it.
+
+**Setup.** OpenSSL made a local CA and a gateway certificate (IP 10.0.2.2 and 127.0.0.1, DNS localhost) in the run's scratch folder. `keytool` made an RSA 3072 upload key there. Both builds used `MINIPLAY_URL=https://10.0.2.2:18443` and user `tls1`, with Flutter 3.44.1, Gradle 9.1.0, Android Gradle plugin 9.0.1 and NDK 28.2. The stack was PostgreSQL 14.18 (Homebrew binaries) on 127.0.0.1:55432, `redis:7.4-alpine` and `apache/kafka:3.9.1` containers, and the six Go services, with the gateway on 127.0.0.1:18443 serving TLS and a fresh `web/dist`. The emulator was the headless Android 14 Pixel 6 AVD with WebView 113.
+
+| Build | Command | APK (arm64-v8a) | Debuggable | Trusts |
+|---|---|---:|---|---|
+| Production release | `flutter build apk --release --target-platform android-arm64 --dart-define=...` | 15,575,672 bytes | No | System CAs only, no cleartext |
+| `localRelease` | `./gradlew ... -Pminiplay.localCaCert=<ca.pem> assembleLocalRelease` with Flutter's own Gradle properties | 17,631,270 bytes | No | System CAs, plus the local CA for three hosts; no cleartext |
+
+Both APKs have the same signer (certificate SHA-256 `f39f615d…e402cb`, a local key that is not committed) and verify with APK Signature Scheme v2. For both, `apkanalyzer manifest debuggable` printed `false`; on the emulator their package flags had no `DEBUGGABLE`, and `run-as` said "package not debuggable". `localRelease` has R8 off: its first build failed in R8 because Flutter's Gradle plugin copies a custom build type's minify setting to the WebView plugin library, which then lost a class the app needs. The build also refused four bad inputs: a release task with no signing configuration, `localRelease` with no CA, the CA's private key in place of its certificate, and a server certificate in place of a CA.
+
+**Device session.**
+- The `localRelease` app loaded `https://10.0.2.2:18443/`, and the host filled in the player name.
+- After tapping Start, 16 taps were sent with `adb input`, and 15 registered. The page showed "Finished rhythm: 90 points", and the host's bar showed "rhythm: 90 points · taps: 15".
+- SQL then held one accepted attempt and one score (tls1, rhythm, 90, 10,039 ms), one published outbox event, one processed event and a daily count of 1. The REST board over HTTPS and the in-app board listed tls1 with 90.
+- With the app idle, `cmd/e2e-probe -ca` scored two players at 180 through the HTTPS gateway: 200, then 409 for each replay. The app's board showed both above tls1 without any touch. The page is HTTPS, so its live socket was `wss`.
+- Final SQL: 3 accepted attempts, 3 scores, 3 published outbox events, 3 processed events, and a daily count of 3 with a sum of 450. The Redis board matched.
+- **Negative check.** The production release app, pointed at the same gateway, showed "Could not load games: certificate rejected (The certificate authority is not trusted.)". The page stayed blank. Logcat had "Trust anchor for certification path not found" and `net_error -202`, and the gateway logged `remote error: tls: unknown certificate`, its only error that session. SQL was unchanged. The same check on 23 October, with only the gateway running, gave the same result.
+
+On 23 October the first `localRelease` launch, seconds after the emulator booted, showed `net::ERR_ADDRESS_UNREACHABLE`; a relaunch a minute later loaded the page. Treat that as the emulator's network starting up rather than a TLS fault; it was not investigated further.
+
+Checks: `go build`, `go vet` and gofmt are clean. `go test ./...` passes 38 top-level tests (32 before), with the 4 opt-in tests skipped. The new tests are 4 in `internal/config` (both-or-neither variables, missing files, a trusted and an untrusted client, TLS 1.1 and plain HTTP refused, HTTP/2 offered, and a `wss` upgrade), 1 in `cmd/gateway` (same-origin `wss` through the proxy over TLS, cross-origin refused) and 1 in `cmd/e2e-probe`. `flutter analyze` reports no issues, `flutter test` passes 2 tests, and the web tests (2) and build pass.
+
+Limits: emulator only, with taps injected by `adb`. The gateway was on the Mac's loopback, reached through the emulator alias `10.0.2.2`, with a locally issued certificate; there was no real network, public DNS name or publicly trusted certificate. The game ran in `localRelease`, which trusts the local CA and has R8 off. The production build was only checked for refusal, and it has not loaded a page, because no publicly trusted certificate was available. That it ignores user-installed CAs is shown by its packaged configuration, not by installing one in the emulator. The identity is a demo identity. PostgreSQL 14.18 binaries were used, where the 22 October sessions used 18.6.
 
 ## Live-board saturation and two more fixes, 22–23 October 2026
 
@@ -126,7 +161,7 @@ The Flutter host was built as a debug APK with `MINIPLAY_URL=http://10.0.2.2:180
 - After tapping Start, 16 taps were sent with `adb input` during the ten seconds and 15 registered. The page showed "Finished rhythm: 100 points". The host's own status bar showed "rhythm: 100 points · taps: 15", so the bridge messages arrived and passed its parser.
 - SQL held one accepted attempt and one score (droid1, rhythm, 100, 10,009 ms), one published outbox event, one processed event and a daily count of 1. The REST board and the in-app board both listed droid1 with 100.
 - With the app idle, two players were scored from the Mac (180 each). The app's board updated to show them above droid1 without any touch, so its live socket worked through the gateway.
-- Plain HTTP loaded because Flutter's Gradle plugin sets `usesCleartextTraffic` in debug builds; the app's own manifests do not allow it.
+- Plain HTTP loaded because the merged manifest had `usesCleartextTraffic=true`. (Corrected 23 October: this line first said Flutter's Gradle plugin adds it to debug builds only. It came from the app's own main manifest, so release builds allowed cleartext too until the 23 October change above.)
 
 Limits: one emulator session with injected taps, not a person on a physical phone, over cleartext to the Mac's loopback, with a demo identity.
 
@@ -178,7 +213,7 @@ This is one functional run on one machine with demo users. It is not a load or l
 
 ## Pending evidence
 
-- A release build over HTTPS on a real network. (An emulator run and a USB-connected physical-phone run, both debug builds, passed on 22 October; see above.)
+- The production release build over a real network, against a gateway with a publicly trusted certificate. (Debug builds passed on an emulator and a USB-connected phone on 22 October, and a release-signed `localRelease` build passed over HTTPS with a local CA on the emulator on 24 October; see above.)
 - Database-backed cheat injection evaluation (abuse checks so far are request-level).
 - The 22 October combined run covered integration, worker restart, Redis loss and dead letters once; it is not repeated under load.
 - A load run from more than one machine, and with Redis outside Docker Desktop's port forwarding. The one-host probe runs out of ephemeral ports near 200 new games a second (22 October), so it cannot show where the services themselves stop. The before-and-after CPU profiles so far are of leaderboard-svc at 80 a second only.

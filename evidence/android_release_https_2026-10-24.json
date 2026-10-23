@@ -1,0 +1,75 @@
+{
+ "what": "First release build of the Flutter host over HTTPS: a release-signed, non-debuggable localRelease build played one tapped game through a TLS gateway on the Android emulator; the production release build refused the same local certificate",
+ "dates": {
+  "builds": "2026-10-23, 18:53-19:10 SGT",
+  "first_load_and_refusal_check": "2026-10-23, 19:11-19:14 SGT (gateway alone, no back-end services)",
+  "device_session": "2026-10-24, 01:12-01:16 SGT, on a fresh disposable stack"
+ },
+ "hardware": "Apple M3 Pro MacBook Pro, 11 cores, 18 GiB, macOS 15.3.1; the workspace's shared CPU lock was held for each build and for the stack and emulator session",
+ "device": {
+  "emulator": "Android Emulator 36.6.11.0, AVD Pixel_6_API_34 (arm64-v8a), Android 14 (API 34), headless, SwiftShader GPU, booted from its existing quick-boot snapshot with -no-snapshot-save",
+  "webview": "Android System WebView 113.0.5672.136"
+ },
+ "tls": {
+  "how": "The gateway served HTTPS itself (MINIPLAY_TLS_CERT and MINIPLAY_TLS_KEY, new in cmd/gateway and internal/config) on 127.0.0.1:18443; the emulator reaches it as https://10.0.2.2:18443. The services behind the gateway stayed plain HTTP on loopback.",
+  "local_ca": "Generated with OpenSSL 3.6.3 in the run's scratch folder, outside the repository: EC P-256, CA:TRUE pathlen 0, 30 days, subject 'MiniPlay local development CA (not for production)', SHA-256 fingerprint 97:28:38:56:21:3B:77:ED:BA:09:6F:9C:7B:A3:A9:34:E7:F2:BC:11:84:A3:C5:CC:45:AF:7B:19:1C:0A:AF:0C",
+  "server_certificate": "EC P-256, signed by that CA, 30 days, serverAuth, subject alternative names IP 10.0.2.2, IP 127.0.0.1 and DNS localhost; SHA-256 fingerprint 7C:4E:05:8C:75:85:F6:C7:FE:0A:91:E4:4B:4D:55:64:E9:50:CF:82:0A:5B:96:B2:DA:F6:34:63:E3:19:BD:D9",
+  "host_checks": "curl with --cacert got {\"status\":\"ok\"} over HTTP/2; curl without the CA failed (unable to get local issuer certificate); a plain-HTTP request to the TLS port got 'Client sent an HTTP request to an HTTPS server'.",
+  "private_keys": "The CA key, server key, keystore and its password stayed in the scratch folder and were deleted at the end of the run. None is in the repository or this file."
+ },
+ "builds": {
+  "toolchain": "Flutter 3.44.1 stable (Dart 3.12.1), Gradle 9.1.0 wrapper, Android Gradle plugin 9.0.1, Kotlin 2.3.20, Gradle JDK 21.0.10 (Android Studio's), NDK 28.2.13676358 (downloaded by the build, removed afterwards), build-tools 36.0.0",
+  "dart_defines": "MINIPLAY_URL=https://10.0.2.2:18443, MINIPLAY_USER=tls1, both builds",
+  "signing": "Local upload key created with keytool in the scratch folder: PKCS12, RSA 3072, alias miniplay-upload, subject 'MiniPlay local upload key (not for distribution)'. Gradle read it through MINIPLAY_KEY_PROPERTIES pointing at an untracked properties file in the same folder. Signer certificate SHA-256 f39f615d1aa743ee7d8326ae21bda5398402b1cf587cce091b4c2bd766e402cb (public; the key is not in the repository). Both APKs verify with apksigner using APK Signature Scheme v2.",
+  "production_release": {
+   "command": "flutter build apk --release --target-platform android-arm64 --dart-define=MINIPLAY_URL=https://10.0.2.2:18443 --dart-define=MINIPLAY_USER=tls1",
+   "time": "106 s, the first build after the NDK and Gradle downloads",
+   "apk": "app-release.apk, 15,575,672 bytes (Flutter reports 15.6 MB), arm64-v8a only, SHA-256 57a2bf8660250da5fc0f6933a00069663188bfa6a764921873c4a7c8efd6a3ce",
+   "package": "com.example.miniplay_host, versionName 1.0.0, versionCode 1, minSdk 24, targetSdk 36, R8 and resource shrinking on",
+   "debuggable": "No application-debuggable line from aapt dump badging; apkanalyzer manifest debuggable printed false; on the emulator pkgFlags had no DEBUGGABLE and run-as said 'package not debuggable'",
+   "network_policy": "The merged manifest has android:networkSecurityConfig and no usesCleartextTraffic. The packaged config is base-config cleartextTrafficPermitted=false with only <certificates src=\"system\"/>: no user CAs and no miniplay_local_ca resource in the APK."
+  },
+  "local_release": {
+   "command": "cd android && ./gradlew -Ptarget-platform=android-arm64 -Ptarget=lib/main.dart -Pbase-application-name=android.app.Application -Pdart-defines=<the same base64 list flutter build apk -v printed> -Pdart-obfuscation=false -Ptrack-widget-creation=true -Ptree-shake-icons=true -Pminiplay.localCaCert=<scratch>/ca.pem assembleLocalRelease",
+   "first_attempt": "Failed in :app:minifyLocalReleaseWithR8 with 'Missing class io.flutter.plugins.webviewflutter.WebViewFlutterPlugin'. Flutter's Gradle plugin had copied the custom build type's minify setting to the webview_flutter_android library, which was then minified on its own. Fixed by turning R8 and resource shrinking off for localRelease only.",
+   "time": "34 s for the successful build",
+   "apk": "app-localRelease.apk, 17,631,270 bytes, arm64-v8a only, SHA-256 9bc7337182ab32b26b87dab3d60ac76f81d67b541c84508663827142a2b29324",
+   "package": "com.example.miniplay_host.local, versionName 1.0.0-local; same signer as the production APK",
+   "debuggable": "apkanalyzer manifest debuggable printed false; on the emulator pkgFlags had no DEBUGGABLE and run-as said 'package not debuggable'",
+   "network_policy": "base-config cleartext false with system CAs only; one domain-config for 10.0.2.2, 127.0.0.1 and localhost (no subdomains), cleartext false, trusting system CAs plus raw/miniplay_local_ca. The bundled certificate's SHA-256 fingerprint equals the local CA's above and the file holds no private key."
+  },
+  "build_guards": [
+   "assembleRelease with no signing configuration stopped with 'Release signing is not configured...'",
+   "prepareLocalCa with no CA path stopped with 'localRelease needs the local CA certificate...'",
+   "prepareLocalCa given the CA's private key file stopped with '... contains a private key; pass only the CA certificate.'",
+   "prepareLocalCa given the server (non-CA) certificate stopped with '... is not a CA certificate.'"
+  ]
+ },
+ "stack": "PostgreSQL 14.18 (Homebrew binaries; initdb --locale=C under LC_ALL=C) on 127.0.0.1:55432 with unix_socket_directories=''; redis:7.4-alpine on 127.0.0.1:16379 and apache/kafka:3.9.1 single-node KRaft on 127.0.0.1:19092 (topics score.events and score.deadletter, 3 partitions); migrations, then the six Go services built with -trimpath -buildvcs=false; the gateway on 127.0.0.1:18443 with TLS, serving a freshly built web/dist. A new per-run HMAC secret was generated in the start script and not recorded.",
+ "steps_and_observations": [
+  "23 October: with only the TLS gateway running, the localRelease app's first launch, seconds after the emulator booted, showed net::ERR_ADDRESS_UNREACHABLE; ping to 10.0.2.2 then worked, and a relaunch loaded the page over https (the leaderboard said unavailable because the back-end services were not running). The production app then showed 'Could not load games: certificate rejected (The certificate authority is not trusted.)'.",
+  "24 October, fresh stack: the emulator's snapshot still held the 22 October debug app; it was uninstalled and both release APKs installed.",
+  "Launched with am start -n com.example.miniplay_host.local/com.example.miniplay_host.MainActivity. The WebView loaded https://10.0.2.2:18443/, the host filled the player field with tls1, and the page said 'Ready. Tap the pulses or catch the comets.'",
+  "Tapped Start, then sent 16 taps on the pulse with adb input during the ten-second game; 15 registered. The page showed 'Finished rhythm: 90 points' and the host's bridge bar 'rhythm: 90 points · taps: 15', so the bridge messages reached the host and passed its parser.",
+  "SQL then held 1 accepted attempt, 1 score (tls1, rhythm, 90, duration 10,039 ms), 1 outbox event (published), 1 processed event and daily_stats rhythm accepted 1, rejected 0, score_sum 90. The REST all-time board over https listed tls1 with 90, and the in-app leaderboard showed '1. tls1: 90'.",
+  "With the app idle, cmd/e2e-probe -gateway https://127.0.0.1:18443 -ca <scratch>/ca.pem scored tlsmac1 and tlsmac2 at 180 each: score 200, replay 409, and the probe's own wss frame arrived 5 ms and 2 ms after scoring. Without touching the emulator, its leaderboard changed to '1. tlsmac2: 180, 2. tlsmac1: 180' above tls1. The page is https, so its live socket was wss through the gateway.",
+  "Final SQL: 3 attempts, all accepted; 3 scores; 3 outbox events, all published; 3 processed events; daily accepted 3, score_sum 450. The Redis all-time board held tlsmac2 180, tlsmac1 180, tls1 90, matching SQL and REST.",
+  "Negative check: launched the production app (com.example.miniplay_host/.MainActivity) against the same gateway. Its bar showed 'Could not load games: certificate rejected (The certificate authority is not trusted.)' and the page stayed blank. Logcat: cr_X509Util 'Trust anchor for certification path not found' and chromium net_error -202 (ERR_CERT_AUTHORITY_INVALID). The gateway logged 'TLS handshake error ... remote error: tls: unknown certificate', its only error line in the session, and SQL still held 3 attempts.",
+  "The services' logs had no error lines. The stack, containers (with their anonymous volumes), PostgreSQL cluster and emulator were stopped and removed afterwards; the AVD was not saved, so it returns to its earlier snapshot."
+ ],
+ "screenshots": [
+  "evidence/android_release_2026-10-24/https_loaded.png",
+  "evidence/android_release_2026-10-24/finished_game.png",
+  "evidence/android_release_2026-10-24/live_board_update.png",
+  "evidence/android_release_2026-10-24/production_refused.png"
+ ],
+ "go_and_flutter_checks": "go build, go vet and gofmt clean; go test ./... passed 38 top-level tests (32 before) with the 4 opt-in database and Redis tests skipped; flutter analyze 0 issues; flutter test 2 passed; web npm test 2 passed and npm run build passed",
+ "limits": [
+  "Emulator only, with taps injected by adb; no person and no physical phone in this session.",
+  "The gateway was on the Mac's loopback, reached through the emulator's 10.0.2.2 alias. No real network, public DNS name or publicly trusted certificate.",
+  "The game ran in localRelease, which trusts the local CA and has R8 off. The production build was checked for refusal only; it has not loaded a page, because no publicly trusted certificate was available.",
+  "The production build's refusal of user-installed CAs is shown by its packaged configuration, not by installing a CA in the emulator's user store.",
+  "Demo user ID supplied by the host; no authenticated identity.",
+  "PostgreSQL 14.18 binaries were used, where the 22 October sessions used 18.6."
+ ]
+}

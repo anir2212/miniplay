@@ -7,6 +7,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -166,7 +168,7 @@ func (c client) watch(ctx context.Context, id game.ID, user string) (<-chan fram
 	u.Scheme = strings.Replace(u.Scheme, "http", "ws", 1)
 	u.Path = "/api/boards/live"
 	u.RawQuery = url.Values{"game": {string(id)}, "period": {"all"}, "user": {user}}.Encode()
-	conn, _, err := websocket.Dial(ctx, u.String(), &websocket.DialOptions{HTTPHeader: http.Header{"Origin": {origin}}})
+	conn, _, err := websocket.Dial(ctx, u.String(), &websocket.DialOptions{HTTPClient: c.http, HTTPHeader: http.Header{"Origin": {origin}}})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -356,6 +358,26 @@ func abuse(c client, user string, secret string) ([]abuseCase, error) {
 	return results, nil
 }
 
+// newHTTPClient returns the probe's client. With a CA file it trusts only
+// that CA, so an https gateway with a locally issued certificate can be probed
+// without adding the CA to the system store.
+func newHTTPClient(caFile string) (*http.Client, error) {
+	client := &http.Client{Timeout: 10 * time.Second}
+	if caFile == "" {
+		return client, nil
+	}
+	data, err := os.ReadFile(caFile)
+	if err != nil {
+		return nil, err
+	}
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM(data) {
+		return nil, fmt.Errorf("%s holds no PEM certificate", caFile)
+	}
+	client.Transport = &http.Transport{TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}}
+	return client, nil
+}
+
 func main() {
 	gateway := flag.String("gateway", "http://127.0.0.1:8080", "gateway base URL")
 	mode := flag.String("mode", "play", "play or abuse")
@@ -364,10 +386,14 @@ func main() {
 	hits := flag.Int("hits", 18, "targets to hit in play mode")
 	hold := flag.Duration("hold", 0, "keep the live socket open this long before starting the run")
 	frameTimeout := flag.Duration("frame-timeout", 20*time.Second, "time to wait for the live frame after scoring")
+	caFile := flag.String("ca", "", "PEM CA certificate to trust, instead of the system store, for an https gateway")
 	flag.Parse()
-	c := client{base: strings.TrimRight(*gateway, "/"), http: &http.Client{Timeout: 10 * time.Second}}
+	httpClient, err := newHTTPClient(*caFile)
+	if err != nil {
+		log.Fatal(err)
+	}
+	c := client{base: strings.TrimRight(*gateway, "/"), http: httpClient}
 	var output any
-	var err error
 	switch *mode {
 	case "play":
 		output, err = play(c, *user, game.ID(*id), *hits, *hold, *frameTimeout)

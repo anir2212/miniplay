@@ -10,6 +10,8 @@ info:
 servers:
   - url: http://127.0.0.1:8080
     description: Local Go gateway
+  - url: https://127.0.0.1:8080
+    description: Local Go gateway with MINIPLAY_TLS_CERT and MINIPLAY_TLS_KEY set (HTTPS only)
 paths:
   /api/health:
     get:

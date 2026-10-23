@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Production policy, used by release and profile builds: HTTPS only, and
+     only the system's certificate authorities. User-installed CAs are not
+     trusted. The debug and localRelease source sets replace this file. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>
