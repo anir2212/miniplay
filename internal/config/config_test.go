@@ -197,3 +197,18 @@ func TestServeTLSCarriesWebSocketUpgrade(t *testing.T) {
 		t.Fatalf("read %q, %v", payload, err)
 	}
 }
+
+func TestAdminTokenFailsClosed(t *testing.T) {
+	t.Setenv("MINIPLAY_ADMIN_TOKEN", "")
+	if _, err := AdminToken(); err == nil {
+		t.Fatal("an unset admin token must stop the service")
+	}
+	t.Setenv("MINIPLAY_ADMIN_TOKEN", strings.Repeat("x", 31))
+	if _, err := AdminToken(); err == nil {
+		t.Fatal("a short admin token must stop the service")
+	}
+	t.Setenv("MINIPLAY_ADMIN_TOKEN", strings.Repeat("x", 32))
+	if token, err := AdminToken(); err != nil || len(token) != 32 {
+		t.Fatalf("token=%q err=%v", token, err)
+	}
+}

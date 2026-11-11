@@ -1,0 +1,8 @@
+# Settings for a local kind cluster. Never run yet: no kind cluster has been used.
+# This file names a Secret and holds no secret values; create the Secret yourself.
+existingSecret: miniplay-local
+image:
+  pullPolicy: Never # images are loaded with `kind load docker-image`
+kafka:
+  brokers: redpanda.miniplay-deps.svc.cluster.local:9092
+trustedProxies: 10.244.0.0/16 # kind's default Pod network

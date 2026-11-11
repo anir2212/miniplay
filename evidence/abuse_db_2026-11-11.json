@@ -1,0 +1,51 @@
+{
+  "protocolSha256": "b48c3361e99aa507ccc38b933fdc8b4a68fbb825060d0aa9258275c636d40e2e",
+  "goVersion": "go1.27.2",
+  "postgresVersion": "PostgreSQL 18.6 (Homebrew) on aarch64-apple-darwin24.6.0, compiled by Apple clang version 17.0.0 (clang-1700.6.4.2), 64-bit",
+  "fixtureCounts": {
+    "attempts": 200,
+    "explainable": 200,
+    "outbox": 200,
+    "reflex": 100,
+    "rhythm": 100,
+    "scores": 200
+  },
+  "scanned": 200,
+  "flagged": 6,
+  "flaggedOnRepeat": 6,
+  "flaggedRunIds": [
+    "abuse-db-reflex-060",
+    "abuse-db-reflex-068",
+    "abuse-db-reflex-072",
+    "abuse-db-rhythm-062",
+    "abuse-db-rhythm-066",
+    "abuse-db-rhythm-079"
+  ],
+  "groups": {
+    "reflex": {
+      "clean": 60,
+      "cleanFlagged": 0,
+      "overt": 20,
+      "overtFlagged": 3,
+      "mimic": 20,
+      "mimicFlagged": 0
+    },
+    "rhythm": {
+      "clean": 60,
+      "cleanFlagged": 0,
+      "overt": 20,
+      "overtFlagged": 3,
+      "mimic": 20,
+      "mimicFlagged": 0
+    }
+  },
+  "truePositive": 6,
+  "falsePositive": 0,
+  "falseNegative": 74,
+  "precision": 1,
+  "recall": 0.075,
+  "overtRecall": 0.15,
+  "mimicRecall": 0,
+  "doublePointsFlagged": 1,
+  "doublePointsTotal": 40
+}

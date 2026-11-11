@@ -1,0 +1,20 @@
+version: "2"
+run:
+  timeout: 5m
+linters:
+  default: standard # errcheck, govet, ineffassign, staticcheck, unused
+  settings:
+    errcheck:
+      # Best-effort cleanup: a rollback after commit and a close at exit have no
+      # useful way to report failure. Everything else must check its error.
+      exclude-functions:
+        - (github.com/jackc/pgx/v5.Tx).Rollback
+        - (*github.com/jackc/pgx/v5.Conn).Close
+        - (io.Closer).Close
+        - (*github.com/coder/websocket.Conn).Close
+        - (*github.com/coder/websocket.Conn).CloseNow
+        - (*github.com/redis/go-redis/v9.Client).Close
+        - (*github.com/redis/go-redis/v9.PubSub).Close
+    staticcheck:
+      # Quick-fix suggestions and one style preference, not defects.
+      checks: ["all", "-QF*", "-S1016", "-ST1000", "-ST1003", "-ST1020", "-ST1021", "-ST1022"]

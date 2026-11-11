@@ -1,10 +1,15 @@
 # Measured results and acceptance
 
-Results below were collected locally on 2026-10-12, 2026-10-13, 2026-10-15, 2026-10-16, 2026-10-22, 2026-10-23 and 2026-10-24. Local load profiles were run on 2026-10-22, with a repeat A/B on 2026-10-23 (below); no GPU or cloud benchmark has been run.
+## First GitHub Actions run — 11 November 2026
+
+On [PR #7](https://github.com/anir2212/miniplay/pull/7), all **12** check runs for head `106f2bebe` completed successfully: lint, Go race and opt-in PostgreSQL/Redis integration tests, web tests/build/Chrome smoke, chart validation, and Docker builds for the eight configured service commands. [Saved check metadata](evidence/ci_2026-11-11.json) records the check names and links. The image jobs used `push: false`; this verifies assembly on GitHub's runner, not a registry release, local image contents for every variant, a kind install, or running services together. The separate local `gateway` contents smoke below remains the only container inspection.
+
+
+Results below were collected locally on 2026-10-12, 2026-10-13, 2026-10-15, 2026-10-16, 2026-10-22, 2026-10-23, 2026-10-24, 2026-11-06 and 2026-11-11. Local load profiles were run on 2026-10-22, with a repeat A/B on 2026-10-23 (below); no GPU or cloud benchmark has been run.
 
 | Check | Result | Command or evidence |
 |---|---:|---|
-| TypeScript game rules | 2 tests passed | `cd web && npm test` |
+| TypeScript game rules | 2 tests passed | `cd web && npm test` (2026-10-12; since 6 November the same command also runs the portal's component tests, reported below) |
 | Web build | Passed | `cd web && npm run build` |
 | Chrome game-start smoke | 1 test passed, exercises both games | `cd web && npm run test:e2e` |
 | Flutter static analysis | 0 issues | `cd flutter_host && flutter analyze` |
@@ -23,6 +28,90 @@ Results below were collected locally on 2026-10-12, 2026-10-13, 2026-10-15, 2026
 | Redis board completeness change | Full Go suite and vet passed. A live Redis 7 test passed partial-key detection, SQL backfill merge, lower-score retry, eviction recovery, and empty-marker invalidation/TTL in 0.03 s | `MINIPLAY_TEST_REDIS_URL=redis://127.0.0.1:16379/15 ... go test ./internal/store -run '^TestRedisBoardRecoveryIntegration$' -count=1 -v` against an isolated `redis:7-alpine` container (2026-10-16). Container stopped and removed. |
 | Incomplete-board fallback | Two focused handler cases passed: failed backfill falls back to a complete SQL answer; when SQL also fails, returns 503 without reading the partial Redis board | `go test ./internal/httpapi -run TestLeaderboardBackfillFailureDoesNotServePartialCache -count=1 -v` (2026-10-16); fake dependencies |
 | OpenAPI document structure | Parsed five public paths and resolved all 43 local `$ref` targets | Ruby YAML parser and local-reference walk on `api/openapi.yaml` (2026-10-16); no live contract test |
+
+## Database-backed synthetic abuse check, 11 November 2026
+
+The [protocol](docs/ABUSE_DB_PROTOCOL.md) was committed alone at `f9169a3` before fixture implementation or scoring (SHA-256 `b48c3361e99aa507ccc38b933fdc8b4a68fbb825060d0aa9258275c636d40e2e`). A guarded runner then created a fresh disposable PostgreSQL 18.6 database on loopback, applied all three migrations, used `game.Replay` to calculate every base score and `store.RecordAttempt` to save the taps, accepted score and outbox row. The unchanged `abuse.Scan` read the stored rows and persisted flags. [Saved measurements](evidence/abuse_db_2026-11-11.json) and a second fresh execution were byte-identical, including the six flagged IDs.
+
+| Validity check | Result |
+|---|---:|
+| Stored attempts, scores, outbox events | 200 each; 100 runs per game |
+| Stored scores matching replayed base × multiplier | 200/200 |
+| Scanner rows / persisted flags | 200 scanned / 6 flags |
+| Second scan of the same database | Same six IDs; six flag rows, no duplicates |
+| Double-points subset | 40/200 runs; 1 flagged |
+
+| Predeclared class, both games combined | Runs | Flagged |
+|---|---:|---:|
+| Clean-labelled controls | 120 | **0** |
+| Overt injected | 40 | **6** (3 per game) |
+| Mimic injected | 40 | **0** |
+
+The primary confusion matrix is **6 true positives, 0 false positives and 74 false negatives**: precision **1.000** among six flags, recall **0.075** overall, **0.150** on overt injections and **0** on mimic injections. This is a negative result for recall even though the database, replay and persistence checks passed. The forest fits on these same 200 rows; it is an in-sample check. All controls and injections were authored synthetic taps, and the mimic class was deliberately made feature-similar to controls. This result is separate from the 13 October feature-vector holdout above and says nothing about actual player or adaptive bot performance. The command bypasses signed HTTP sessions and does not exercise Redis, Kafka or the live board.
+
+## First local gateway image build, 11 November 2026
+
+After checking 26 GiB of rounded host free space against the workspace's 20 GiB Docker startup gate, Docker Desktop 29.5.3 built **one** `gateway` variant from `deploy/Dockerfile`: `docker build --progress=plain -f deploy/Dockerfile --build-arg SERVICE=gateway -t miniplay/gateway:dev .`. The build passed. The local arm64 image ID was `sha256:3d039e564ccfdbe011bbaba538eccf0818f553cd0daaa9dd7e9c1163b5d405de`, size 7,549,221 bytes. An ephemeral non-root container checked `/app/app`, `web/dist/index.html` and migration 003 and printed UID 10001; it exited, leaving no MiniPlay container. [Build evidence](evidence/image_build_2026-11-11.json) records the commands and limits. Rounded free disk read 22 GiB afterward; other work shared the machine, so that change is not attributed solely to this build.
+
+At this local-build checkpoint, the other seven variants and remote workflow had not run; the later PR CI built all eight variants without pushing (see above). A kind cluster, chart install and autoscaler event remain untested. The build proves this one image can be assembled and contains those files; it does not prove a running deployment or a real network path. Existing unrelated Docker containers were left untouched.
+
+## Admin portal, double-points flag, CI and Helm chart, 6 November 2026
+
+**What ran where.**
+
+| Path | How it ran |
+|---|---|
+| Portal, admin API, flag writes, audit, score rows, abuse scan | Real: gateway and admin-service binaries, Google Chrome 156 headless, PostgreSQL 18.6 on loopback, the real migration and abuse-scan binaries |
+| Session, score and leaderboard logic | Real handler code in `cmd/portal-check-backend` |
+| Redis (rate limits, boards, pub/sub) | **Stand-in.** Every rate-limit check passed, board writes were dropped, and boards were read from SQL. No Redis exists on this machine and Docker stays stopped, so the three Redis integration tests stayed skipped |
+| Kafka, outbox publisher, stats worker, live WebSocket board | **Did not run.** Outbox rows stayed pending. The portal's daily totals came from the harness calling the SQL aggregate directly for its seeded runs |
+| `session-svc`, `score-svc`, `leaderboard-svc` binaries | **Did not run.** They need Redis at startup, so the double-points wiring in `cmd/score-svc/main.go` compiled but did not execute |
+
+All players were synthetic: 80 seeded runs (40 per game) plus runs the test drove. This is not a combined-stack result, and it says nothing about load.
+
+**Browser check** ([evidence](evidence/admin_portal_2026-11-06.json), [desktop](evidence/admin_portal_2026-11-06/portal_desktop.png) and [phone-width](evidence/admin_portal_2026-11-06/portal_phone_width.png) screenshots). 3 of 3 Playwright tests passed; `scripts/admin_portal_check.sh` reruns them.
+
+| Check | Result |
+|---|---|
+| No token | 5 of 5 read routes answered 401 with no token and with a wrong one (10 of 10 requests); PUT without a token 401. A wrong token in the browser stayed on sign-in and showed no data |
+| Fail closed | `admin-svc` exited 1 with no token and with a short one. With `admin-svc` stopped, the gateway answered 502 |
+| Flag off | Base 30, score 30, multiplier 1, version 1 |
+| Inside the staleness bound | A submission returning 8 ms after the page confirmed the toggle, and 140 ms after the cache loaded, stored multiplier 1, version 1: the old state, recorded as such |
+| At the bound | A run signed before the toggle, submitted after 5 s: base 30, score 60, multiplier 2, version 2 |
+| Resubmission | 409, with the row unchanged |
+| Claiming the doubled score | 422 `score mismatch` |
+| Signed while on, submitted after off and the bound | Score 30, multiplier 1, version 3 |
+| Real game in Chrome, flag on | 18 mouse clicks on the running Phaser game: "Finished rhythm: 360 points (180 x 2, double points)", version 4. A scripted player on loopback, not a person |
+| Stored record | 5 of 5 browser-driven rows matched the above in SQL; rows breaking `score = base_score * multiplier`: 0 |
+| Audit | 4 changes wrote 4 rows with actor, action, game, before and after. `DELETE /api/admin/audit` 405; SQL `UPDATE` refused by the trigger |
+| Raised runs | The real scan read 80 runs and raised 2, both the outlier planted for each game. Shown with evidence and "A review signal, not a verdict" |
+| Page | No Content Security Policy violations or page errors; no horizontal overflow at 390 px |
+
+**Tests.**
+
+| Suite | Before (start of day) | After |
+|---|---|---|
+| `go test ./...`, cases including subtests | 65 passed, 0 failed, 4 skipped (opt-in) | 108 passed, 0 failed, 9 skipped (opt-in) |
+| `go test -race ./...`, `go vet ./...` | Vet clean; race not run | Both clean |
+| PostgreSQL 18.6 opt-in tests, fresh database | Not run | 6 of 6 passed; 3 Redis tests skipped ([output](evidence/admin_integration_2026-11-06.txt)) |
+| `cd web && npm test` | 2 passed | 2 game-rule and 21 portal tests passed |
+| `cd web && npm run test:e2e` | Not run | 1 of 1 passed |
+| Deliberate code changes the tests should catch | Not run | 12 of 12 caught ([list](evidence/mutation_checks_2026-11-06.json)) |
+
+The PostgreSQL tests cover: a flag change and audit row committing together, and rolling back together when the audit insert fails; a stale version refused; 8 concurrent changes with 1 winner and 7 conflicts; append-only refusals, including statements matching no rows and TRUNCATE; a backfill of existing rows through migration 003; and the score handler, flag cache and admin handler over real SQL, with a fake limiter and board.
+
+**CI and Helm chart: local checks only** ([evidence](evidence/ci_chart_2026-11-06.json)).
+
+| Check | Result | Limit |
+|---|---|---|
+| `actionlint` 1.7.12 on the workflow | 0 errors | Shell inside `run` steps was not checked: shellcheck is not installed. The workflow first ran on PR #7 on 11 November; see the new section above |
+| `golangci-lint` 2.15.0 | 0 issues | After `.golangci.yml` excluded best-effort cleanup from errcheck and quick-fix and style suggestions from staticcheck. The default set reported 37 (29 errcheck on cleanup calls, 8 staticcheck suggestions) |
+| `helm lint` 3.19.0 | 1 of 1 chart passed, with one note that an icon is recommended | |
+| `helm template` | 14 resources: 7 Deployments, 5 Services, 1 HorizontalPodAutoscaler, 1 Job. A missing Secret name or Kafka address stops rendering | Text only |
+| `kubeconform` 0.8.0, strict, Kubernetes 1.33.0 schemas | 14 of 14 valid, with and without TLS | Schema only |
+| `scripts/check_chart.sh` | Passed: each service has the variables its code reads, secret-bearing values come only from a Secret reference, and the autoscaler targets `score-svc` by CPU | Reads rendered text |
+
+**As of 6 November, not done:** no kind cluster ran, no chart was installed, `deploy/Dockerfile` had not been built because Docker was stopped, no Action ran, and no autoscaler scale event occurred. The first `gateway` image build on 11 November is recorded above.
 
 ## HTTPS release build on the Android emulator, 23–24 October 2026
 
@@ -61,7 +150,7 @@ Limits: emulator only, with taps injected by `adb`. The gateway was on the Mac's
 
 ## Live-board saturation and two more fixes, 22–23 October 2026
 
-This continues the afternoon profile (described further down) past 40 new games a second. The setup was the same, with these changes. Every run started from a new disposable PostgreSQL 18.6 cluster and new Redis 7.4.11 and Kafka 3.9.1 containers, and no other heavy job ran on the machine during it. Binaries were built with `-trimpath -buildvcs=false`, so a variant's binaries differ only where its code differs. The probe now also records how late each scheduled game starts (`start_lag`). CPU is cumulative CPU time over the probe's run divided by wall time, so 100% is one of the 11 cores. Docker Desktop's own processes were sampled too, because Redis and Kafka sit behind its port forwarding. Evidence, with no tokens or secret: [`evidence/load_saturation_2026-10-22.json`](evidence/load_saturation_2026-10-22.json).
+This continues the afternoon profile (described further down) past 40 new games a second. The setup was the same, with these changes. Every run started from a new disposable PostgreSQL 18.6 cluster and new Redis 7.4.11 and Kafka 3.9.1 containers, and held the workspace's shared CPU lock from stack start to teardown. Binaries were built with `-trimpath -buildvcs=false`, so a variant's binaries differ only where its code differs. The probe now also records how late each scheduled game starts (`start_lag`). CPU is cumulative CPU time over the probe's run divided by wall time, so 100% is one of the 11 cores. Docker Desktop's own processes were sampled too, because Redis and Kafka sit behind its port forwarding. Evidence, with no tokens or secret: [`evidence/load_saturation_2026-10-22.json`](evidence/load_saturation_2026-10-22.json).
 
 Each step ran:
 
@@ -71,7 +160,7 @@ load-probe -gateway http://127.0.0.1:18080 -rate R -duration 60s -watchers 50 -b
 
 The probe kept its schedule in every run: start-lag p99 stayed at or below 10 ms. In every run, SQL's attempts, scores, published and processed events and daily count agreed with each other and with the Redis board. Up to 160 a second they also equalled the games the probe saw accepted. From 200 a second, SQL held up to about 150 more, because those requests committed after the probe's 10-second client timeout.
 
-**Before the fixes (the previous version of the code), 22 October, evening.**
+**Before the fixes (commit `0b3ac5e`), 22 October, evening.**
 
 | New games a second | Games | Accepted | Rank frame p50 / p95 / p99 | Score p99 | leaderboard-svc CPU | Docker port forwarding / VM CPU | Redis CPU |
 |---:|---:|---:|---:|---:|---:|---:|---:|
@@ -123,7 +212,7 @@ Both broadcaster runs beat both base runs on every p50, p95 and p99 measured.
 
 The next limit inside the code is already visible. Each board's hub builds frames one at a time, and a build does one rank lookup and one frame per watching player, so it takes longer as players join. Changes that arrive during a build fold into the next one. Each watcher received about one frame per change at 40 a second, one per 1.5 changes at 80, one per 3.1 at 120 and one per 5.5 at 160 with both fixes. The rank frame's p99 rose with that, from 68–87 ms at 80 a second to 172–204 ms at 160.
 
-**Repeat A/B, 23 October, morning.** Base (the previous version) against the final code (broadcaster and gateway pool) at 80 a second, in the order base, fix, base, fix. Each run had a fresh stack. The binaries were rebuilt from the previous version and from the final tree, and were byte-identical to the 22 October builds. The laptop was on battery (29% falling to 25%) with Low Power Mode on, and each run was wrapped in `caffeinate -i`.
+**Repeat A/B, 23 October, morning.** Base (`0b3ac5e`) against the final code (broadcaster and gateway pool) at 80 a second, in the order base, fix, base, fix. Each run had a fresh stack and its own lock hold. The binaries were rebuilt from a temporary worktree at `0b3ac5e` and from the final tree, and were byte-identical to the 22 October builds. The laptop was on battery (29% falling to 25%) with Low Power Mode on, and each run was wrapped in `caffeinate -i`.
 
 | At 80 a second, 23 October | Base runs | Final runs |
 |---|---:|---:|
@@ -214,9 +303,10 @@ This is one functional run on one machine with demo users. It is not a load or l
 ## Pending evidence
 
 - The production release build over a real network, against a gateway with a publicly trusted certificate. (Debug builds passed on an emulator and a USB-connected phone on 22 October, and a release-signed `localRelease` build passed over HTTPS with a local CA on the emulator on 24 October; see above.)
-- Database-backed cheat injection evaluation (abuse checks so far are request-level).
+- Real-player labels and an independently designed cheat evaluation. The 11 November database-backed synthetic check closed the stored-run scanner path, but its recall was 0.075 on an authored, in-sample fixture and it bypassed signed HTTP sessions.
 - The 22 October combined run covered integration, worker restart, Redis loss and dead letters once; it is not repeated under load.
 - A load run from more than one machine, and with Redis outside Docker Desktop's port forwarding. The one-host probe runs out of ephemeral ports near 200 new games a second (22 October), so it cannot show where the services themselves stop. The before-and-after CPU profiles so far are of leaderboard-svc at 80 a second only.
-- Docker Compose, kind/Helm, and remote CI execution.
+- Docker Compose (not written); a chart install on kind with an autoscaler scale event; runtime inspection of the seven other image variants. One local `gateway` image passed a contents smoke on 11 November. PR #7 then passed all 12 GitHub Actions jobs, including eight build-only image variants; no image was pushed or deployed.
+- The admin portal and double-points flag with the real `score-svc` binary, Redis, Kafka, the outbox publisher and the stats worker together. The 6 November browser check used a Redis stand-in and no Kafka. The three Redis integration tests last ran in October, before this feature.
 
 The precision and recall above describe only this deterministic synthetic generator. No real-player detection claim is made, and no throughput or latency claim beyond the one-laptop measurements above.

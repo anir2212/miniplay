@@ -1,0 +1,256 @@
+{
+  "check": "admin portal in headless Chrome on the real gateway",
+  "ranAt": "2026-11-06T09:46:37.663Z",
+  "environment": {
+    "postgres": "postgres (PostgreSQL) 18.6 (Homebrew)",
+    "chrome": "Google Chrome 156.0.8078.80 ",
+    "flagTtlSeconds": 5
+  },
+  "realServices": [
+    "PostgreSQL (disposable, loopback)",
+    "cmd/gateway",
+    "cmd/admin-svc",
+    "cmd/migrate",
+    "cmd/abuse-scan",
+    "Google Chrome headless",
+    "session, score and leaderboard handler code"
+  ],
+  "standIns": [
+    "Redis: cmd/portal-check-backend allows every rate-limit check, drops board writes and serves boards from SQL"
+  ],
+  "notRunning": [
+    "Kafka",
+    "cmd/outbox-publisher",
+    "cmd/stats-worker",
+    "cmd/session-svc, cmd/score-svc and cmd/leaderboard-svc binaries (they need Redis at startup)",
+    "/api/boards/live"
+  ],
+  "syntheticData": "All players are synthetic. 80 seeded runs plus the browser-* runs driven by the test; seeded daily_stats rows come from calling the SQL aggregate directly, not from Kafka.",
+  "abuseScan": {
+    "scanned": 80,
+    "flagged": 2,
+    "skippedGames": []
+  },
+  "failClosed": {
+    "adminSvcWithoutTokenExit": 1,
+    "adminSvcShortTokenExit": 1,
+    "harnessWithoutOptInExit": 1,
+    "gatewayStatusWithAdminSvcStopped": 502
+  },
+  "auditTamperAttempt": "ERROR:  admin_audit is append-only: UPDATE refused\nCONTEXT:  PL/pgSQL function admin_audit_refuse_change() line 3 at RAISE",
+  "playwrightExit": 0,
+  "browser": {
+    "unauthenticated": {
+      "routes": {
+        "/api/admin/games": [
+          401,
+          401
+        ],
+        "/api/admin/stats": [
+          401,
+          401
+        ],
+        "/api/admin/flagged-runs": [
+          401,
+          401
+        ],
+        "/api/admin/audit": [
+          401,
+          401
+        ],
+        "/api/admin/runs/anything": [
+          401,
+          401
+        ]
+      },
+      "putWithoutToken": 401
+    },
+    "wrongTokenInBrowser": "stayed on sign-in; \"The server refused that token.\"",
+    "flagRule": {
+      "flagOff": {
+        "runId": "kGwrIrHtFzz77jE6eHvGaA",
+        "user": "browser-flag-off",
+        "game": "rhythm",
+        "score": 30,
+        "baseScore": 30,
+        "multiplier": 1,
+        "flagVersion": 1,
+        "durationMs": 10000,
+        "submittedAt": "2026-11-06T17:46:04.437484+08:00"
+      },
+      "insideBound": {
+        "runId": "AVAOky36bZxUuyumCRUzmg",
+        "user": "browser-inside-bound",
+        "game": "rhythm",
+        "score": 30,
+        "baseScore": 30,
+        "multiplier": 1,
+        "flagVersion": 1,
+        "durationMs": 10000,
+        "submittedAt": "2026-11-06T17:46:04.582216+08:00",
+        "msAfterCacheLoad": 140,
+        "msAfterToggle": 8
+      },
+      "afterBoundSignedBeforeToggle": {
+        "runId": "2ROMUH4cSwbOmbh6Zfy1ZQ",
+        "user": "browser-before-toggle",
+        "game": "rhythm",
+        "score": 60,
+        "baseScore": 30,
+        "multiplier": 2,
+        "flagVersion": 2,
+        "durationMs": 10000,
+        "submittedAt": "2026-11-06T17:46:09.593384+08:00"
+      },
+      "resubmissionStatus": 409,
+      "claimedDoubledScore": {
+        "status": 422,
+        "body": {
+          "error": "score mismatch"
+        }
+      }
+    },
+    "explanation": "30 x 2 = 60\n\nbrowser-before-toggle on Pulse Field, accepted 6 Nov 2026, 5:46:09 pm, run 2ROMUH4cSwbOmbh6Zfy1ZQ.\n\nFlag version 2 was set to on by local-demo-admin at 6 Nov 2026, 5:46:04 pm.",
+    "signedWhileOnSubmittedAfterOff": {
+      "runId": "WJd8A03bVa4t1OIW2eXVDA",
+      "user": "browser-started-while-on",
+      "game": "rhythm",
+      "score": 30,
+      "baseScore": 30,
+      "multiplier": 1,
+      "flagVersion": 3,
+      "durationMs": 10000,
+      "submittedAt": "2026-11-06T17:46:19.358467+08:00"
+    },
+    "auditApiDelete": 405,
+    "auditEntries": 2,
+    "statsRow": "Pulse Field\t44\t1\t1\t44\t6 Nov 2026, 5:46:19 pm",
+    "outboxLine": "Events waiting in the outbox: 85, oldest from 6 Nov 2026, 5:45:42 pm.",
+    "aggregateRows": 2,
+    "raisedRunsShown": 2,
+    "firstRaisedRun": "synthetic-high-scorer Comet Catch\n\nRaised 6 Nov 2026, 5:45:43 pm\n\nUnusual mix of run features (isolation forest)\nBase score far above this game's average (z-score of 3 or more)\nScore\n195 x 1 = 195\nIsolation score\n0.749\nBase-score z-score\n4.24\nShare of maximum base score\n100%\nRun length\n10.0 s\nMean timing error\n0.0 ms\nTap rhythm variation (CV)\n0.04\nTaps\n13\nExplain run synthetic2840d138c2fff1fff34a2ea1",
+    "horizontalOverflowAt390px": 0,
+    "contentSecurityPolicyOrPageErrors": 0,
+    "portalPageHeldNoData": true,
+    "realGameInBrowser": {
+      "clicks": 18,
+      "status": "Finished rhythm: 360 points (180 x 2, double points)"
+    }
+  },
+  "sql": {
+    "runs": [
+      {
+        "user_id": "browser-flag-off",
+        "game": "rhythm",
+        "score": 30,
+        "base_score": 30,
+        "multiplier": 1,
+        "flag_version": 1
+      },
+      {
+        "user_id": "browser-inside-bound",
+        "game": "rhythm",
+        "score": 30,
+        "base_score": 30,
+        "multiplier": 1,
+        "flag_version": 1
+      },
+      {
+        "user_id": "browser-before-toggle",
+        "game": "rhythm",
+        "score": 60,
+        "base_score": 30,
+        "multiplier": 2,
+        "flag_version": 2
+      },
+      {
+        "user_id": "browser-started-while-on",
+        "game": "rhythm",
+        "score": 30,
+        "base_score": 30,
+        "multiplier": 1,
+        "flag_version": 3
+      },
+      {
+        "user_id": "browser-player",
+        "game": "rhythm",
+        "score": 360,
+        "base_score": 180,
+        "multiplier": 2,
+        "flag_version": 4
+      }
+    ],
+    "audit": [
+      {
+        "actor": "local-demo-admin",
+        "action": "feature_flag.double_points.set",
+        "game": "rhythm",
+        "before_value": {
+          "version": 1,
+          "doublePoints": false
+        },
+        "after_value": {
+          "version": 2,
+          "doublePoints": true
+        }
+      },
+      {
+        "actor": "local-demo-admin",
+        "action": "feature_flag.double_points.set",
+        "game": "rhythm",
+        "before_value": {
+          "version": 2,
+          "doublePoints": true
+        },
+        "after_value": {
+          "version": 3,
+          "doublePoints": false
+        }
+      },
+      {
+        "actor": "local-demo-admin",
+        "action": "feature_flag.double_points.set",
+        "game": "rhythm",
+        "before_value": {
+          "version": 3,
+          "doublePoints": false
+        },
+        "after_value": {
+          "version": 4,
+          "doublePoints": true
+        }
+      },
+      {
+        "actor": "local-demo-admin",
+        "action": "feature_flag.double_points.set",
+        "game": "rhythm",
+        "before_value": {
+          "version": 4,
+          "doublePoints": true
+        },
+        "after_value": {
+          "version": 5,
+          "doublePoints": false
+        }
+      }
+    ],
+    "flags": [
+      {
+        "game": "reflex",
+        "double_points": false,
+        "version": 1
+      },
+      {
+        "game": "rhythm",
+        "double_points": false,
+        "version": 5
+      }
+    ],
+    "counts": {
+      "flaggedRuns": 2,
+      "scores": 85,
+      "outboxPending": 86,
+      "scoresBreakingArithmetic": 0
+    }
+  }
+}

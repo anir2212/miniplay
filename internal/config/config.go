@@ -29,6 +29,20 @@ func Required(key string) (string, error) {
 	return value, nil
 }
 
+// AdminToken reads MINIPLAY_ADMIN_TOKEN, the shared local demo credential for
+// the admin API. A missing or short token stops the service from starting, so
+// the admin API can never run open.
+func AdminToken() (string, error) {
+	token, err := Required("MINIPLAY_ADMIN_TOKEN")
+	if err != nil {
+		return "", err
+	}
+	if len(token) < 32 {
+		return "", errors.New("MINIPLAY_ADMIN_TOKEN must have at least 32 characters")
+	}
+	return token, nil
+}
+
 // TLSFiles reads MINIPLAY_TLS_CERT and MINIPLAY_TLS_KEY, the PEM certificate
 // chain and private key a service should serve HTTPS with. Both unset means
 // plain HTTP. Setting only one is an error, so a half-finished TLS setup never

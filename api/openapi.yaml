@@ -1,12 +1,13 @@
 openapi: 3.1.0
 info:
   title: MiniPlay local API
-  version: 0.4.0
+  version: 0.6.0
   description: >-
-    Public gateway contract for the local prototype. User names are demo
-    identities; this API does not authenticate accounts and is not ready for
-    public deployment. Signed run tokens bind each score to a server-issued
-    game, seed, user and expiry.
+    Gateway contract for the local prototype. User names are demo identities;
+    the player routes do not authenticate accounts and this API is not ready for
+    public deployment. Signed run tokens bind each score to a server-issued game,
+    seed, user and expiry. The admin routes need one shared local demo bearer
+    token, checked by the admin service on every request.
 servers:
   - url: http://127.0.0.1:8080
     description: Local Go gateway
@@ -56,10 +57,15 @@ paths:
       summary: Submit one run for authoritative replay
       operationId: submitScore
       description: >-
-        The claimed score is the base replay score before a possible server
-        double-points flag. An accepted or rejected attempt consumes the run
-        ID once in PostgreSQL. A second submission returns 409. Successful
-        SQL persistence is authoritative even if Redis cache update fails.
+        The claimed score is the base replay score, never the multiplied one.
+        After replay accepts it, the flag state the score service holds at
+        submission decides the multiplier; the state when the run was signed
+        does not count. That state is at most MINIPLAY_FLAG_TTL old (default
+        5 s, maximum 60 s). If it cannot be read the service answers 503 and the
+        token stays usable. An accepted or rejected attempt consumes the run ID
+        once in PostgreSQL. A second submission returns 409 and changes nothing.
+        Successful SQL persistence is authoritative even if Redis cache update
+        fails.
       requestBody:
         required: true
         content:
@@ -151,7 +157,227 @@ paths:
           $ref: '#/components/responses/Unavailable'
       x-websocket-message:
         $ref: '#/components/schemas/LiveBoardMessage'
+  /api/admin/games:
+    get:
+      summary: List games with their double-points flag
+      operationId: adminGames
+      security:
+        - adminToken: []
+      responses:
+        '200':
+          description: Current flags and the longest a score service may keep using an old one.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [games, flagMaxStalenessSeconds]
+                properties:
+                  games:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AdminGame'
+                  flagMaxStalenessSeconds:
+                    type: number
+        '401':
+          $ref: '#/components/responses/AdminUnauthorized'
+        '503':
+          $ref: '#/components/responses/AdminUnavailable'
+  /api/admin/games/{game}/double-points:
+    put:
+      summary: Turn a game's double points on or off
+      operationId: adminSetDoublePoints
+      description: >-
+        Changes the flag and writes one audit row in the same transaction. The
+        actor in that row comes from server configuration, not the request.
+        Setting the value it already holds returns changed=false and writes no row.
+      security:
+        - adminToken: []
+      parameters:
+        - name: game
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/Game'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [doublePoints, expectedVersion]
+              properties:
+                doublePoints:
+                  type: boolean
+                expectedVersion:
+                  type: integer
+                  description: The flag version the admin was looking at.
+      responses:
+        '200':
+          description: The flag after the request.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [flag, changed, flagMaxStalenessSeconds]
+                properties:
+                  flag:
+                    $ref: '#/components/schemas/Flag'
+                  changed:
+                    type: boolean
+                  flagMaxStalenessSeconds:
+                    type: number
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/AdminUnauthorized'
+        '404':
+          description: Unknown game.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: expectedVersion is stale. Nothing changed; the body holds the current flag.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error, flag]
+                properties:
+                  error:
+                    type: string
+                  flag:
+                    $ref: '#/components/schemas/Flag'
+        '503':
+          $ref: '#/components/responses/AdminUnavailable'
+  /api/admin/stats:
+    get:
+      summary: Read live figures, labelled by source
+      operationId: adminStats
+      description: >-
+        games, outboxPending and oldestPendingAt are direct SQL reads over the last
+        24 hours. aggregates comes from daily_stats, which only moves while the
+        outbox publisher, Kafka and the stats worker are running.
+      security:
+        - adminToken: []
+      responses:
+        '200':
+          description: Live figures.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LiveStats'
+        '401':
+          $ref: '#/components/responses/AdminUnauthorized'
+        '503':
+          $ref: '#/components/responses/AdminUnavailable'
+  /api/admin/flagged-runs:
+    get:
+      summary: List runs the offline scan raised for review
+      operationId: adminFlaggedRuns
+      description: These are review signals with their evidence, not cheating verdicts.
+      security:
+        - adminToken: []
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+            default: 100
+      responses:
+        '200':
+          description: Raised runs, newest first.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [runs]
+                properties:
+                  runs:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/FlaggedRun'
+        '401':
+          $ref: '#/components/responses/AdminUnauthorized'
+        '503':
+          $ref: '#/components/responses/AdminUnavailable'
+  /api/admin/runs/{runId}:
+    get:
+      summary: Explain one accepted score
+      operationId: adminExplainRun
+      security:
+        - adminToken: []
+      parameters:
+        - name: runId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The stored numbers and the audit row behind their flag version, if any.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunExplanation'
+        '401':
+          $ref: '#/components/responses/AdminUnauthorized'
+        '404':
+          description: No accepted run has that ID.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          $ref: '#/components/responses/AdminUnavailable'
+  /api/admin/audit:
+    get:
+      summary: Read the append-only audit log, newest first
+      operationId: adminAudit
+      description: This is the only audit route. Other methods return 405.
+      security:
+        - adminToken: []
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+        - name: before
+          in: query
+          description: Return entries with an ID below this one.
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Audit entries.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [entries]
+                properties:
+                  entries:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AuditEntry'
+        '401':
+          $ref: '#/components/responses/AdminUnauthorized'
+        '503':
+          $ref: '#/components/responses/AdminUnavailable'
 components:
+  securitySchemes:
+    adminToken:
+      type: http
+      scheme: bearer
+      description: >-
+        One shared local demo token from MINIPLAY_ADMIN_TOKEN, compared in constant
+        time on the server. The admin service will not start without it.
   parameters:
     Game:
       name: game
@@ -183,6 +409,22 @@ components:
       schema:
         $ref: '#/components/schemas/User'
   responses:
+    AdminUnauthorized:
+      description: The bearer token is missing or wrong.
+      headers:
+        WWW-Authenticate:
+          schema:
+            type: string
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    AdminUnavailable:
+      description: The token is not configured on the handler, or the database could not answer.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
     BadRequest:
       description: Invalid JSON, query, user or game.
       content:
@@ -272,14 +514,16 @@ components:
           type: integer
           minimum: 0
           maximum: 195
-          description: Client's base score before the server's feature flag.
+          description: >-
+            The base score the client computed, which replay must match. Claiming
+            a multiplied score is a mismatch. The request cannot carry a multiplier.
         durationMs:
           type: integer
           minimum: 9500
           maximum: 12000
     Score:
       type: object
-      required: [runId, user, game, score, durationMs, submittedAt]
+      required: [runId, user, game, score, baseScore, multiplier, flagVersion, durationMs, submittedAt]
       properties:
         runId:
           type: string
@@ -291,11 +535,193 @@ components:
           type: integer
           minimum: 0
           maximum: 390
+          description: The final score, equal to baseScore times multiplier.
+        baseScore:
+          type: integer
+          minimum: 0
+          maximum: 195
+          description: The score replay validated.
+        multiplier:
+          type: integer
+          enum: [1, 2]
+        flagVersion:
+          type: integer
+          minimum: 0
+          description: The feature_flags version that decided the multiplier.
         durationMs:
           type: integer
         submittedAt:
           type: string
           format: date-time
+    Flag:
+      type: object
+      required: [game, doublePoints, version, updatedAt]
+      properties:
+        game:
+          $ref: '#/components/schemas/Game'
+        doublePoints:
+          type: boolean
+        version:
+          type: integer
+          minimum: 1
+        updatedAt:
+          type: string
+          format: date-time
+    AdminGame:
+      type: object
+      required: [id, title, flag]
+      properties:
+        id:
+          $ref: '#/components/schemas/Game'
+        title:
+          type: string
+        flag:
+          $ref: '#/components/schemas/Flag'
+    GameLiveStats:
+      type: object
+      required: [game, accepted, rejected, doubled, players, lastAcceptedAt]
+      properties:
+        game:
+          $ref: '#/components/schemas/Game'
+        accepted:
+          type: integer
+        rejected:
+          type: integer
+        doubled:
+          type: integer
+          description: Accepted runs with a multiplier above 1.
+        players:
+          type: integer
+        lastAcceptedAt:
+          type: [string, 'null']
+          format: date-time
+    DailyStat:
+      type: object
+      required: [game, day, accepted, rejected, scoreSum, medianScore]
+      properties:
+        game:
+          $ref: '#/components/schemas/Game'
+        day:
+          type: string
+          format: date-time
+        accepted:
+          type: integer
+        rejected:
+          type: integer
+        scoreSum:
+          type: integer
+          description: Includes the double-points multiplier.
+        medianScore:
+          type: number
+          description: Includes the double-points multiplier.
+    LiveStats:
+      type: object
+      required: [generatedAt, windowStart, games, outboxPending, oldestPendingAt, aggregates]
+      properties:
+        generatedAt:
+          type: string
+          format: date-time
+        windowStart:
+          type: string
+          format: date-time
+        games:
+          type: array
+          items:
+            $ref: '#/components/schemas/GameLiveStats'
+        outboxPending:
+          type: integer
+        oldestPendingAt:
+          type: [string, 'null']
+          format: date-time
+        aggregates:
+          type: array
+          items:
+            $ref: '#/components/schemas/DailyStat'
+    FlaggedRun:
+      type: object
+      required: [runId, user, game, isolationScore, zScore, reasons, evidence, flaggedAt, score, baseScore, multiplier]
+      properties:
+        runId:
+          type: string
+        user:
+          $ref: '#/components/schemas/User'
+        game:
+          $ref: '#/components/schemas/Game'
+        isolationScore:
+          type: number
+        zScore:
+          type: number
+          description: Computed on base scores.
+        reasons:
+          type: array
+          items:
+            type: string
+        evidence:
+          type: object
+          additionalProperties:
+            type: number
+        flaggedAt:
+          type: string
+          format: date-time
+        score:
+          type: integer
+        baseScore:
+          type: integer
+        multiplier:
+          type: integer
+    AuditEntry:
+      type: object
+      required: [id, actor, action, game, before, after, details, at]
+      properties:
+        id:
+          type: integer
+        actor:
+          type: string
+          description: The server's configured name for the shared token, not a verified person.
+        action:
+          type: string
+        game:
+          $ref: '#/components/schemas/Game'
+        before:
+          type: object
+        after:
+          type: object
+        details:
+          type: object
+          additionalProperties:
+            type: string
+        at:
+          type: string
+          format: date-time
+    RunExplanation:
+      type: object
+      required: [runId, user, game, score, baseScore, multiplier, flagVersion, durationMs, submittedAt, flagChange]
+      properties:
+        runId:
+          type: string
+        user:
+          $ref: '#/components/schemas/User'
+        game:
+          $ref: '#/components/schemas/Game'
+        score:
+          type: integer
+        baseScore:
+          type: integer
+        multiplier:
+          type: integer
+        flagVersion:
+          type: integer
+          description: 0 means stored before flag versions existed; 1 is the initial off state.
+        durationMs:
+          type: integer
+        submittedAt:
+          type: string
+          format: date-time
+        flagChange:
+          description: The audit row that produced flagVersion. Null for versions 0 and 1.
+          oneOf:
+            - $ref: '#/components/schemas/AuditEntry'
+            - type: 'null'
     Leader:
       type: object
       required: [user, score]

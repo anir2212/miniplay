@@ -1,0 +1,100 @@
+{
+ "ranAt": "2026-11-06",
+ "method": "Each change was applied to the source, the named package tests ran (with the disposable PostgreSQL where they need it), and the file was restored.",
+ "caught": 12,
+ "total": 12,
+ "mutations": [
+  {
+   "mutation": "cache keeps a value one tick past its TTL",
+   "caught": true,
+   "failingTests": [
+    "TestChangeIsSeenExactlyAtTheStalenessBound",
+    "TestBoundCountsFromTheStartOfTheRead",
+    "TestFailedRefreshNeverServesAnExpiredValue",
+    "TestZeroTTLReadsEveryTime"
+   ]
+  },
+  {
+   "mutation": "cache measures age from the end of the read",
+   "caught": true,
+   "failingTests": [
+    "TestBoundCountsFromTheStartOfTheRead"
+   ]
+  },
+  {
+   "mutation": "cache serves the expired value when a refresh fails",
+   "caught": true,
+   "failingTests": [
+    "TestFailedRefreshNeverServesAnExpiredValue"
+   ]
+  },
+  {
+   "mutation": "score service ignores the flag",
+   "caught": true,
+   "failingTests": [
+    "TestDoublePointsAppliesAfterReplayAndIsExplained",
+    "TestFlagChangeDuringARun",
+    "TestCachedFlagIsRecordedHonestlyAndExpiresAtTheBound",
+    "TestConcurrentResubmissionsDoubleOnce"
+   ]
+  },
+  {
+   "mutation": "replay compares the claim to the doubled score",
+   "caught": true,
+   "failingTests": [
+    "TestReplayStillValidatesTheBaseScoreDuringAnEvent"
+   ]
+  },
+  {
+   "mutation": "token check accepts any non-empty token",
+   "caught": true,
+   "failingTests": [
+    "TestAdminRefusesAMissingOrWrongToken",
+    "TestTokenMatches"
+   ]
+  },
+  {
+   "mutation": "admin API opens when no token is configured",
+   "caught": true,
+   "failingTests": [
+    "TestAdminFailsClosedWithoutAConfiguredToken"
+   ]
+  },
+  {
+   "mutation": "abuse scanner judges the doubled score",
+   "caught": true,
+   "failingTests": [
+    "TestScannerIgnoresDoublePointsMultiplier"
+   ]
+  },
+  {
+   "mutation": "audit row is written after the flag commits",
+   "caught": true,
+   "failingTests": [
+    "TestFlagChangeAndAuditCommitTogetherIntegration",
+    "TestAuditIsAppendOnlyIntegration"
+   ]
+  },
+  {
+   "mutation": "append-only trigger removed",
+   "caught": true,
+   "failingTests": [
+    "TestAuditIsAppendOnlyIntegration"
+   ]
+  },
+  {
+   "mutation": "scores table loses the arithmetic constraint",
+   "caught": true,
+   "failingTests": [
+    "TestStoredScoresStayExplainableIntegration"
+   ]
+  },
+  {
+   "mutation": "an audit route accepts DELETE",
+   "caught": true,
+   "failingTests": [
+    "TestAuditRouteIsReadOnly"
+   ]
+  }
+ ]
+}

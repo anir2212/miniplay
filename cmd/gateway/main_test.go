@@ -39,7 +39,12 @@ func (db *testAttempts) RecordAttempt(_ context.Context, row store.Score, _ []ga
 	row.SubmittedAt = time.Now()
 	return row, nil
 }
-func (*testAttempts) DoublePoints(context.Context, game.ID) (bool, error) { return false, nil }
+
+type testFlag struct{}
+
+func (testFlag) Current(context.Context, game.ID) (store.Flag, error) {
+	return store.Flag{Version: 1}, nil
+}
 
 func TestGatewayRoutesAPIsAndServesBuiltClient(t *testing.T) {
 	webRoot := t.TempDir()
@@ -55,7 +60,7 @@ func TestGatewayRoutesAPIsAndServesBuiltClient(t *testing.T) {
 			w.WriteHeader(http.StatusAccepted)
 		})
 	}
-	handler := newHandler(upstream("session"), upstream("score"), upstream("leaderboard"), webRoot)
+	handler := newHandler(upstream("session"), upstream("score"), upstream("leaderboard"), upstream("admin"), webRoot)
 	tests := []struct {
 		method, path, upstream string
 		status                 int
@@ -92,9 +97,9 @@ func TestGatewayRealHTTPSessionToScoreFlowWithFakes(t *testing.T) {
 	db := &testAttempts{used: make(map[string]bool)}
 	sessions := httptest.NewServer(httpapi.SessionHandler(signer, testCache{}))
 	defer sessions.Close()
-	scores := httptest.NewServer(httpapi.ScoreHandler(signer, db, testCache{}, func() int64 { return now.Add(10 * time.Second).UnixMilli() }))
+	scores := httptest.NewServer(httpapi.ScoreHandler(signer, db, testFlag{}, testCache{}, func() int64 { return now.Add(10 * time.Second).UnixMilli() }))
 	defer scores.Close()
-	gateway := httptest.NewServer(newHandler(proxy(sessions.URL, upstreamTransport()), proxy(scores.URL, upstreamTransport()), http.NotFoundHandler(), t.TempDir()))
+	gateway := httptest.NewServer(newHandler(proxy(sessions.URL, upstreamTransport()), proxy(scores.URL, upstreamTransport()), http.NotFoundHandler(), http.NotFoundHandler(), t.TempDir()))
 	defer gateway.Close()
 	client := &http.Client{Timeout: 3 * time.Second}
 	post := func(path string, value any) *http.Response {
@@ -214,7 +219,7 @@ func TestGatewayCarriesSameOriginWebSocketOverTLS(t *testing.T) {
 		_ = conn.Close(websocket.StatusNormalClosure, "")
 	}))
 	defer upstream.Close()
-	gateway := httptest.NewUnstartedServer(newHandler(http.NotFoundHandler(), http.NotFoundHandler(), proxy(upstream.URL, upstreamTransport()), t.TempDir()))
+	gateway := httptest.NewUnstartedServer(newHandler(http.NotFoundHandler(), http.NotFoundHandler(), proxy(upstream.URL, upstreamTransport()), http.NotFoundHandler(), t.TempDir()))
 	gateway.EnableHTTP2 = true
 	gateway.StartTLS()
 	defer gateway.Close()
@@ -240,5 +245,48 @@ func TestGatewayCarriesSameOriginWebSocketOverTLS(t *testing.T) {
 	conn.CloseNow()
 	if _, resp, err := dial("https://other.example"); err == nil || resp == nil || resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("cross-origin wss: err=%v resp=%v, want 403", err, resp)
+	}
+}
+
+func TestGatewayForwardsAdminAndServesThePortal(t *testing.T) {
+	webRoot := t.TempDir()
+	for name, contents := range map[string]string{"index.html": "game page", "admin.html": "admin portal"} {
+		if err := os.WriteFile(filepath.Join(webRoot, name), []byte(contents), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var forwarded *http.Request
+	admin := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { forwarded = r; w.WriteHeader(http.StatusTeapot) })
+	handler := newHandler(http.NotFoundHandler(), http.NotFoundHandler(), http.NotFoundHandler(), admin, webRoot)
+
+	request := httptest.NewRequest(http.MethodGet, "/api/admin/games", nil)
+	request.Header.Set("Authorization", "Bearer token-from-the-browser")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusTeapot || forwarded == nil || forwarded.Header.Get("Authorization") != "Bearer token-from-the-browser" {
+		t.Fatalf("status=%d forwarded=%v", response.Code, forwarded)
+	}
+
+	for _, path := range []string{"/admin", "/admin.html"} {
+		response = httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+		if response.Code != http.StatusOK || response.Body.String() != "admin portal" {
+			t.Fatalf("%s: status=%d body=%q", path, response.Code, response.Body.String())
+		}
+		if !strings.Contains(response.Header().Get("Content-Security-Policy"), "default-src 'self'") {
+			t.Fatalf("%s CSP=%q", path, response.Header().Get("Content-Security-Policy"))
+		}
+	}
+}
+
+func TestGatewayAnswers502WhenAdminServiceIsDown(t *testing.T) {
+	stopped := httptest.NewServer(http.NotFoundHandler())
+	url := stopped.URL
+	stopped.Close()
+	handler := newHandler(http.NotFoundHandler(), http.NotFoundHandler(), http.NotFoundHandler(), proxy(url, upstreamTransport()), t.TempDir())
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/admin/games", nil))
+	if response.Code != http.StatusBadGateway {
+		t.Fatalf("status=%d", response.Code)
 	}
 }

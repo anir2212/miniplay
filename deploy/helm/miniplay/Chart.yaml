@@ -1,0 +1,6 @@
+apiVersion: v2
+name: miniplay
+description: MiniPlay Go services for a local kind cluster. A prototype chart, rendered and linted but never deployed.
+type: application
+version: 0.1.0
+appVersion: "0.6.0"

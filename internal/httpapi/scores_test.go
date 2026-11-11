@@ -38,7 +38,16 @@ func (s *fakeStore) RecordAttempt(_ context.Context, row store.Score, _ []game.T
 	row.SubmittedAt = time.Now()
 	return row, nil
 }
-func (*fakeStore) DoublePoints(context.Context, game.ID) (bool, error) { return false, nil }
+
+// fixedFlag is a FlagReader that always answers with one flag.
+type fixedFlag struct {
+	flag store.Flag
+	err  error
+}
+
+func (f *fixedFlag) Current(context.Context, game.ID) (store.Flag, error) { return f.flag, f.err }
+
+func flagOff() *fixedFlag { return &fixedFlag{flag: store.Flag{Version: 1}} }
 
 type fakeCache struct{}
 
@@ -66,7 +75,7 @@ func TestScoreSubmissionConsumesRunExactlyOnce(t *testing.T) {
 	target, _ := game.Targets(game.Rhythm, started.Seed)
 	submission := Submission{Token: started.Token, Events: []game.Tap{{MS: target[0].MS, X: target[0].X, Y: target[0].Y}}, Score: 10, DurationMS: 10000}
 	db := &fakeStore{used: map[string]bool{}}
-	handler := ScoreHandler(signer, db, &fakeCache{}, func() int64 { return now.UnixMilli() })
+	handler := ScoreHandler(signer, db, flagOff(), &fakeCache{}, func() int64 { return now.UnixMilli() })
 	const concurrent = 24
 	statuses := make(chan int, concurrent)
 	var wg sync.WaitGroup
@@ -97,7 +106,7 @@ func TestInvalidScoreConsumesRunAndRecordsRejection(t *testing.T) {
 	started, _ := signer.Issue("bob", game.Reflex)
 	now = now.Add(10 * time.Second)
 	db := &fakeStore{used: map[string]bool{}}
-	handler := ScoreHandler(signer, db, &fakeCache{}, func() int64 { return now.UnixMilli() })
+	handler := ScoreHandler(signer, db, flagOff(), &fakeCache{}, func() int64 { return now.UnixMilli() })
 	submission := Submission{Token: started.Token, Score: 15, DurationMS: 10000}
 	if status := postScore(t, handler, submission); status != 422 {
 		t.Fatalf("status=%d", status)

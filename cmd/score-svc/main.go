@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"miniplay/internal/config"
+	"miniplay/internal/flags"
 	"miniplay/internal/httpapi"
 	"miniplay/internal/store"
 	"miniplay/internal/token"
@@ -38,7 +39,15 @@ func main() {
 		log.Fatal(err)
 	}
 	defer cache.Client.Close()
-	handler := httpapi.ScoreHandler(signer, db, cache, func() int64 { return time.Now().UnixMilli() })
+	flagTTL, err := flags.TTLFromEnv()
+	if err != nil {
+		log.Fatal(err)
+	}
+	flagCache, err := flags.NewCache(db, flagTTL, nil)
+	if err != nil {
+		log.Fatal(err)
+	}
+	handler := httpapi.ScoreHandler(signer, db, flagCache, cache, func() int64 { return time.Now().UnixMilli() })
 	if err = config.Serve(config.LocalAddr("8082"), handler); err != nil {
 		log.Fatal(err)
 	}

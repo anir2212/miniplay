@@ -1,0 +1,15 @@
+{
+  "ranAt": "2026-11-06T09:46:40Z",
+  "plainStatement": "Local lint, render and schema checks only. The workflow has never run on GitHub because nothing is pushed. No kind cluster ran, no chart was installed, no image was built because Docker stays stopped, and no autoscaler scale event occurred.",
+  "tools": {
+    "helm": "v3.19.0+g3d8990f",
+    "kubeconform": "v0.8.0",
+    "actionlint": "1.7.12",
+    "golangciLint": "2.15.0",
+    "go": "go1.27.2"
+  },
+  "workflow": { "file": ".github/workflows/ci.yml", "actionlintErrors": 0, "actionlintLimits": "shellcheck and pyflakes are not installed here, so actionlint did not check the shell inside run steps", "jobs": ["lint", "go-test", "web", "chart", "images"], "ranOnGitHub": false },
+  "lint": { "command": "golangci-lint run ./...", "issues": 0, "config": ".golangci.yml excludes best-effort cleanup calls from errcheck and quick-fix and some style checks from staticcheck. Before those exclusions the default set reported 37 issues: 29 errcheck on deferred cleanup and 8 staticcheck suggestions." },
+  "chart": { "command": "scripts/check_chart.sh helm kubeconform", "helmLint": "1 chart linted, 0 failed; 1 INFO that an icon is recommended", "rendered": { "Deployment": 7, "HorizontalPodAutoscaler": 1, "Job": 1, "Service": 5 }, "kubeconform": "strict, Kubernetes 1.33.0 schemas: 14 of 14 valid on the kind values and 14 of 14 on the TLS variant", "notProven": ["install on a cluster", "image pull or startup", "readiness probes passing", "metrics-server or an HPA scale event", "service-to-service networking", "migration hook running"] },
+  "dockerfile": { "file": "deploy/Dockerfile", "built": false, "reason": "Docker stays stopped because free disk is under 20 GiB; no Dockerfile linter was run" }
+}

@@ -1,0 +1,13 @@
+{{- $trusted := .Values.trustedProxies -}}
+{{- $session := list (dict "name" "MINIPLAY_TRUSTED_PROXIES" "value" $trusted) -}}
+{{- include "miniplay.workload" (dict "root" . "name" "session-svc" "config" .Values.session "secretKeys" (list "MINIPLAY_HMAC_SECRET" "REDIS_URL") "env" $session) }}
+---
+{{ include "miniplay.workload" (dict "root" . "name" "score-svc" "config" .Values.score "autoscaled" .Values.score.autoscaling.enabled "secretKeys" (list "MINIPLAY_HMAC_SECRET" "DATABASE_URL" "REDIS_URL") "env" (list (dict "name" "MINIPLAY_TRUSTED_PROXIES" "value" $trusted) (dict "name" "MINIPLAY_FLAG_TTL" "value" .Values.flagTTL))) }}
+---
+{{ include "miniplay.workload" (dict "root" . "name" "leaderboard-svc" "config" .Values.leaderboard "secretKeys" (list "DATABASE_URL" "REDIS_URL") "env" list) }}
+---
+{{ include "miniplay.workload" (dict "root" . "name" "admin-svc" "config" .Values.admin "secretKeys" (list "DATABASE_URL" "MINIPLAY_ADMIN_TOKEN") "env" (list (dict "name" "MINIPLAY_TRUSTED_PROXIES" "value" $trusted) (dict "name" "MINIPLAY_FLAG_TTL" "value" .Values.flagTTL) (dict "name" "MINIPLAY_ADMIN_ACTOR" "value" .Values.admin.actor))) }}
+---
+{{ include "miniplay.workload" (dict "root" . "name" "outbox-publisher" "config" .Values.outboxPublisher "secretKeys" (list "DATABASE_URL") "env" (list (dict "name" "KAFKA_BROKERS" "value" (required "Set kafka.brokers" .Values.kafka.brokers)))) }}
+---
+{{ include "miniplay.workload" (dict "root" . "name" "stats-worker" "config" .Values.statsWorker "secretKeys" (list "DATABASE_URL" "REDIS_URL") "env" (list (dict "name" "KAFKA_BROKERS" "value" .Values.kafka.brokers))) }}
