@@ -4,7 +4,7 @@ import { replay, targets, RUN_MS, type GameId, type Tap } from './logic';
 import './style.css';
 
 type Started = { token: string; seed: string; runId: string };
-type Score = { score: number; user: string; game: GameId };
+type Score = { score: number; baseScore: number; multiplier: number; user: string; game: GameId };
 const byId = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
 const userInput = byId<HTMLInputElement>('user');
 const gameInput = byId<HTMLSelectElement>('game');
@@ -110,7 +110,9 @@ async function finish(): Promise<void> {
   try {
     const score = replay(run.game, run.started.seed, run.taps);
     const result = await request<Score>('/api/scores', { token: run.started.token, events: run.taps, score, durationMs });
-    status.textContent = `Finished ${run.game}: ${result.score} points`;
+    // The server decides the multiplier; the client only ever claims the base score.
+    const bonus = result.multiplier > 1 ? ` (${result.baseScore} x ${result.multiplier}, double points)` : '';
+    status.textContent = `Finished ${run.game}: ${result.score} points${bonus}`;
     emit({ type: 'miniplay', version: 1, event: 'finish', game: run.game, score: result.score });
   } catch (error) {
     status.textContent = `Score rejected: ${(error as Error).message}`;

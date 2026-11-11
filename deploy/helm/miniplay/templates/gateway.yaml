@@ -1,0 +1,14 @@
+{{- $env := list
+  (dict "name" "SESSION_URL" "value" (include "miniplay.url" (dict "root" . "name" "session-svc" "port" .Values.session.port)))
+  (dict "name" "SCORE_URL" "value" (include "miniplay.url" (dict "root" . "name" "score-svc" "port" .Values.score.port)))
+  (dict "name" "LEADERBOARD_URL" "value" (include "miniplay.url" (dict "root" . "name" "leaderboard-svc" "port" .Values.leaderboard.port)))
+  (dict "name" "ADMIN_URL" "value" (include "miniplay.url" (dict "root" . "name" "admin-svc" "port" .Values.admin.port)))
+  (dict "name" "WEB_DIST" "value" "/app/web/dist") -}}
+{{- if .Values.gateway.tlsSecret -}}
+{{- $env = concat $env (list (dict "name" "MINIPLAY_TLS_CERT" "value" "/tls/tls.crt") (dict "name" "MINIPLAY_TLS_KEY" "value" "/tls/tls.key")) -}}
+{{- $mount := "- name: tls\n  mountPath: /tls\n  readOnly: true" -}}
+{{- $volume := printf "- name: tls\n  secret:\n    secretName: %s" .Values.gateway.tlsSecret -}}
+{{ include "miniplay.workload" (dict "root" . "name" "gateway" "config" .Values.gateway "healthPath" "/api/health" "scheme" "HTTPS" "secretKeys" list "env" $env "volumeMounts" $mount "volumes" $volume) }}
+{{- else -}}
+{{ include "miniplay.workload" (dict "root" . "name" "gateway" "config" .Values.gateway "healthPath" "/api/health" "secretKeys" list "env" $env) }}
+{{- end }}

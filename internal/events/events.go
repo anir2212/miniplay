@@ -22,6 +22,10 @@ func Validate(event store.Event) error {
 		if event.ID != "accepted:"+event.RunID || event.Score < 0 || event.Score > 390 || event.Reason != "" {
 			return errors.New("invalid accepted event")
 		}
+		// Events published before M6 have no multiplier and skip this check.
+		if event.Multiplier != 0 && ((event.Multiplier != 1 && event.Multiplier != 2) || event.Score != event.BaseScore*event.Multiplier) {
+			return errors.New("accepted event score does not equal base score times multiplier")
+		}
 	} else if event.Kind == "score.rejected" {
 		if event.ID != "rejected:"+event.RunID || event.Reason == "" {
 			return errors.New("invalid rejected event")

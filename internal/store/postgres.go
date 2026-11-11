@@ -20,19 +20,27 @@ type Score struct {
 	User        string    `json:"user"`
 	Game        game.ID   `json:"game"`
 	Score       int       `json:"score"`
+	BaseScore   int       `json:"baseScore"`
+	Multiplier  int       `json:"multiplier"`
+	FlagVersion int64     `json:"flagVersion"`
 	DurationMS  int       `json:"durationMs"`
 	SubmittedAt time.Time `json:"submittedAt"`
 }
 
 type Event struct {
-	ID     string    `json:"eventId"`
-	Kind   string    `json:"kind"`
-	RunID  string    `json:"runId,omitempty"`
-	User   string    `json:"user,omitempty"`
-	Game   game.ID   `json:"game,omitempty"`
-	Score  int       `json:"score,omitempty"`
-	Reason string    `json:"reason,omitempty"`
-	At     time.Time `json:"at"`
+	ID    string  `json:"eventId"`
+	Kind  string  `json:"kind"`
+	RunID string  `json:"runId,omitempty"`
+	User  string  `json:"user,omitempty"`
+	Game  game.ID `json:"game,omitempty"`
+	Score int     `json:"score,omitempty"`
+	// BaseScore, Multiplier and FlagVersion explain Score on accepted events.
+	// Events published before M6 omit them, and Multiplier then reads as 0.
+	BaseScore   int       `json:"baseScore,omitempty"`
+	Multiplier  int       `json:"multiplier,omitempty"`
+	FlagVersion int64     `json:"flagVersion,omitempty"`
+	Reason      string    `json:"reason,omitempty"`
+	At          time.Time `json:"at"`
 }
 
 type Postgres struct{ Pool *pgxpool.Pool }
@@ -75,12 +83,13 @@ func (db *Postgres) RecordAttempt(ctx context.Context, row Score, taps []game.Ta
 		if err != nil {
 			return Score{}, err
 		}
-		err = tx.QueryRow(ctx, `INSERT INTO scores(run_id,user_id,game,score,duration_ms,events)
-            VALUES($1,$2,$3,$4,$5,$6) RETURNING submitted_at`, row.RunID, row.User, row.Game, row.Score, row.DurationMS, encoded).Scan(&row.SubmittedAt)
+		err = tx.QueryRow(ctx, `INSERT INTO scores(run_id,user_id,game,score,base_score,multiplier,flag_version,duration_ms,events)
+            VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING submitted_at`, row.RunID, row.User, row.Game, row.Score, row.BaseScore, row.Multiplier, row.FlagVersion, row.DurationMS, encoded).Scan(&row.SubmittedAt)
 		if err != nil {
 			return Score{}, err
 		}
 		event.ID, event.Kind, event.At = "accepted:"+row.RunID, "score.accepted", row.SubmittedAt
+		event.BaseScore, event.Multiplier, event.FlagVersion = row.BaseScore, row.Multiplier, row.FlagVersion
 	} else {
 		event.ID, event.Kind = "rejected:"+row.RunID, "score.rejected"
 		_, err = tx.Exec(ctx, `INSERT INTO rejections(event_id,run_id,user_id,game,reason,rejected_at) VALUES($1,$2,$3,$4,$5,$6)`, event.ID, event.RunID, event.User, event.Game, reason, event.At)
@@ -129,10 +138,4 @@ func (db *Postgres) Leaderboard(ctx context.Context, id game.ID, since time.Time
 
 func (db *Postgres) BestScores(ctx context.Context, id game.ID, since time.Time) ([]Score, error) {
 	return db.Leaderboard(ctx, id, since, "", 0)
-}
-
-func (db *Postgres) DoublePoints(ctx context.Context, id game.ID) (bool, error) {
-	var enabled bool
-	err := db.Pool.QueryRow(ctx, `SELECT double_points FROM feature_flags WHERE game=$1`, id).Scan(&enabled)
-	return enabled, err
 }

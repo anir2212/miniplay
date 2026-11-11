@@ -63,3 +63,24 @@ func TestValidateEvent(t *testing.T) {
 		t.Fatal("impossible score accepted")
 	}
 }
+
+func TestValidateChecksTheMultiplierArithmetic(t *testing.T) {
+	event := store.Event{ID: "accepted:run", Kind: "score.accepted", RunID: "run", User: "alice", Game: game.Reflex, At: time.Now()}
+	for _, test := range []struct {
+		name               string
+		score, base, multi int
+		valid              bool
+	}{
+		{"highest possible doubled score", 390, 195, 2, true},
+		{"undoubled", 100, 100, 1, true},
+		{"event from before M6", 100, 0, 0, true},
+		{"score is not base times multiplier", 300, 100, 2, false},
+		{"multiplier that does not exist", 300, 100, 3, false},
+		{"above the doubled maximum", 392, 196, 2, false},
+	} {
+		event.Score, event.BaseScore, event.Multiplier = test.score, test.base, test.multi
+		if err := Validate(event); (err == nil) != test.valid {
+			t.Errorf("%s: err=%v", test.name, err)
+		}
+	}
+}

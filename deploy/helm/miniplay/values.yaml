@@ -1,0 +1,89 @@
+# Image repository for every service is <image.registry>/<service>:<image.tag>.
+image:
+  registry: miniplay
+  tag: dev
+  pullPolicy: IfNotPresent
+
+# REQUIRED. The chart holds no secrets and does not create this Secret: rendering
+# stops with an error until you name one you made yourself. It must contain:
+#   DATABASE_URL          PostgreSQL connection URL
+#   REDIS_URL             Redis connection URL
+#   MINIPLAY_HMAC_SECRET  at least 32 characters, shared by session and score services
+#   MINIPLAY_ADMIN_TOKEN  at least 32 characters; admin-svc refuses to start without it
+existingSecret: ""
+
+# PostgreSQL, Redis and Kafka are not part of this chart.
+kafka:
+  brokers: ""
+
+# CIDRs whose X-Forwarded-For entries the session, score and admin services trust.
+# Set this to the Pod network of your cluster, or rate limits will key on the gateway.
+trustedProxies: ""
+
+# How long score-svc may reuse a flag read. admin-svc reports the same value to the portal.
+flagTTL: 5s
+
+# Run cmd/migrate as a Helm hook before install and upgrade.
+migrations:
+  enabled: true
+
+gateway:
+  replicas: 1
+  port: 8080
+  serviceType: ClusterIP
+  resources:
+    requests: {cpu: 100m, memory: 64Mi}
+    limits: {memory: 128Mi}
+  # Name of a kubernetes.io/tls Secret. Empty leaves the gateway on plain HTTP inside
+  # the cluster, so terminate TLS in front of it before any non-local use: the admin
+  # token and run tokens must not cross a real network in the clear. Keep keys out of
+  # this repository. A deployment needs a publicly trusted certificate, not the local CA.
+  tlsSecret: ""
+
+session:
+  replicas: 1
+  port: 8081
+  resources:
+    requests: {cpu: 100m, memory: 64Mi}
+    limits: {memory: 128Mi}
+
+score:
+  replicas: 1
+  port: 8082
+  resources:
+    # The CPU autoscaler measures use against this request, so it must be set.
+    requests: {cpu: 200m, memory: 64Mi}
+    limits: {memory: 192Mi}
+  autoscaling:
+    enabled: true
+    minReplicas: 1
+    maxReplicas: 4
+    targetCPUUtilizationPercentage: 70
+
+leaderboard:
+  replicas: 1
+  port: 8083
+  resources:
+    requests: {cpu: 100m, memory: 64Mi}
+    limits: {memory: 192Mi}
+
+admin:
+  replicas: 1
+  port: 8084
+  # The name the audit log records. It labels the shared token, not a verified person.
+  actor: local-demo-admin
+  resources:
+    requests: {cpu: 50m, memory: 32Mi}
+    limits: {memory: 96Mi}
+
+outboxPublisher:
+  replicas: 1
+  resources:
+    requests: {cpu: 50m, memory: 32Mi}
+    limits: {memory: 96Mi}
+
+statsWorker:
+  replicas: 1
+  resources:
+    requests: {cpu: 50m, memory: 32Mi}
+    limits: {memory: 96Mi}

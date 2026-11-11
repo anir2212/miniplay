@@ -1,0 +1,22 @@
+{{- if .Values.score.autoscaling.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "miniplay.fullname" (dict "root" . "name" "score-svc") }}
+  labels:
+    {{- include "miniplay.labels" (dict "root" . "name" "score-svc") | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "miniplay.fullname" (dict "root" . "name" "score-svc") }}
+  minReplicas: {{ .Values.score.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.score.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.score.autoscaling.targetCPUUtilizationPercentage }}
+{{- end }}

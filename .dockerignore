@@ -1,0 +1,11 @@
+.git
+.cache
+.toolchain
+.npm-cache
+web/node_modules
+web/dist
+web/test-results
+web/test-results-admin
+flutter_host
+evidence
+docs

@@ -1,0 +1,21 @@
+{
+  "date_sgt": "2026-11-11",
+  "source_commit_before_build": "dbd8fbe32ab9d902a2fef2efdf85dcece6149770",
+  "docker_server_version": "29.5.3",
+  "command": "docker build --progress=plain -f deploy/Dockerfile --build-arg SERVICE=gateway -t miniplay/gateway:dev .",
+  "result": "passed",
+  "image": {
+    "tag": "miniplay/gateway:dev",
+    "id": "sha256:3d039e564ccfdbe011bbaba538eccf0818f553cd0daaa9dd7e9c1163b5d405de",
+    "size_bytes": 7549221,
+    "architecture": "arm64",
+    "entrypoint": ["/app/app"]
+  },
+  "smoke_command": "docker run --rm --entrypoint /bin/sh miniplay/gateway:dev -c 'test -x /app/app && test -f /app/web/dist/index.html && test -f /app/db/migrations/003_admin_flags.sql && id -u'",
+  "smoke_result": "passed; uid 10001",
+  "free_disk_rounded_gib_before_build": 26,
+  "free_disk_rounded_gib_after_build": 22,
+  "disk_note": "Rounded df -h readings while other work shared the machine; the difference is not attributed solely to this build.",
+  "running_miniplay_containers_after_smoke": 0,
+  "scope": "One local image build and contents smoke. No kind cluster, chart install, autoscaler event, remote CI run, or image push."
+}

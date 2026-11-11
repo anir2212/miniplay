@@ -39,8 +39,9 @@ func main() {
 	session := proxy(config.Env("SESSION_URL", "http://127.0.0.1:8081"), upstream)
 	score := proxy(config.Env("SCORE_URL", "http://127.0.0.1:8082"), upstream)
 	leaderboard := proxy(config.Env("LEADERBOARD_URL", "http://127.0.0.1:8083"), upstream)
+	admin := proxy(config.Env("ADMIN_URL", "http://127.0.0.1:8084"), upstream)
 	webRoot := config.Env("WEB_DIST", "web/dist")
-	handler := newHandler(session, score, leaderboard, webRoot)
+	handler := newHandler(session, score, leaderboard, admin, webRoot)
 	// With MINIPLAY_TLS_CERT and MINIPLAY_TLS_KEY set, the gateway serves
 	// HTTPS only; the services behind it stay plain HTTP on loopback.
 	certFile, keyFile, err := config.TLSFiles()
@@ -61,16 +62,28 @@ func main() {
 	}
 }
 
-func newHandler(session, score, leaderboard http.Handler, webRoot string) http.Handler {
+func newHandler(session, score, leaderboard, admin http.Handler, webRoot string) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("/api/sessions", session)
 	mux.Handle("/api/scores", score)
 	mux.Handle("/api/leaderboards", leaderboard)
 	mux.Handle("/api/boards/live", leaderboard)
+	// The admin service checks the admin token on every request. The gateway
+	// only forwards, so a stopped admin service answers 502 and exposes nothing.
+	mux.Handle("/api/admin/", admin)
 	mux.HandleFunc("/api/health", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	})
+	// The portal page holds no data; every figure on it needs the admin token.
+	portal := func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		w.Header().Set("Cache-Control", "no-store")
+		http.ServeFile(w, r, filepath.Join(webRoot, "admin.html"))
+	}
+	mux.HandleFunc("GET /admin", portal)
+	mux.HandleFunc("GET /admin.html", portal)
 	files := http.FileServer(http.Dir(webRoot))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/api/") {

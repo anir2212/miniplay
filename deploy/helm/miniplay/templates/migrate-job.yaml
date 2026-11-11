@@ -1,0 +1,32 @@
+{{- if .Values.migrations.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "miniplay.fullname" (dict "root" . "name" "migrate") }}
+  labels:
+    {{- include "miniplay.labels" (dict "root" . "name" "migrate") | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 2
+  template:
+    metadata:
+      labels:
+        {{- include "miniplay.labels" (dict "root" . "name" "migrate") | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        {{- include "miniplay.podSecurity" . | nindent 8 }}
+      containers:
+        - name: migrate
+          image: {{ include "miniplay.image" (dict "root" . "name" "migrate") }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- include "miniplay.containerSecurity" . | nindent 12 }}
+          env:
+            - name: MIGRATION_DIR
+              value: /app/db/migrations
+            {{- include "miniplay.secretEnv" (dict "root" . "key" "DATABASE_URL") | nindent 12 }}
+{{- end }}

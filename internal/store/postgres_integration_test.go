@@ -31,7 +31,7 @@ func TestPostgresAttemptAndEventIntegration(t *testing.T) {
 	if databaseName != "miniplay_it" {
 		t.Fatalf("refusing to write to %q; use a disposable miniplay_it database", databaseName)
 	}
-	if applied, err := migrate.Apply(ctx, conn, "../../db/migrations"); err != nil || applied != 2 {
+	if applied, err := migrate.Apply(ctx, conn, "../../db/migrations"); err != nil || applied != 3 {
 		t.Fatalf("first migration pass: applied=%d err=%v", applied, err)
 	}
 	if applied, err := migrate.Apply(ctx, conn, "../../db/migrations"); err != nil || applied != 0 {
@@ -44,7 +44,7 @@ func TestPostgresAttemptAndEventIntegration(t *testing.T) {
 	defer db.Pool.Close()
 
 	row := Score{RunID: "integration-accepted", User: "integration-user", Game: game.Rhythm,
-		Score: 17, DurationMS: game.RunMilliseconds}
+		Score: 17, BaseScore: 17, Multiplier: 1, FlagVersion: 1, DurationMS: game.RunMilliseconds}
 	var wg sync.WaitGroup
 	results := make(chan error, 12)
 	for range 12 {

@@ -17,7 +17,7 @@ func Apply(ctx context.Context, conn *pgx.Conn, directory string) (int, error) {
 	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock(47211011)`); err != nil {
 		return 0, err
 	}
-	defer conn.Exec(context.Background(), `SELECT pg_advisory_unlock(47211011)`)
+	defer func() { _, _ = conn.Exec(context.Background(), `SELECT pg_advisory_unlock(47211011)`) }()
 	if _, err := conn.Exec(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations(version TEXT PRIMARY KEY,applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`); err != nil {
 		return 0, err
 	}
@@ -53,15 +53,11 @@ func Apply(ctx context.Context, conn *pgx.Conn, directory string) (int, error) {
 			tx.Rollback(ctx)
 			return applied, err
 		}
-		for _, statement := range strings.Split(string(contents), ";") {
-			statement = strings.TrimSpace(statement)
-			if statement == "" {
-				continue
-			}
-			if _, err = tx.Exec(ctx, statement); err != nil {
-				tx.Rollback(ctx)
-				return applied, fmt.Errorf("migration %s: %w", name, err)
-			}
+		// No arguments means pgx uses the simple protocol, which accepts a whole
+		// file of statements, including function bodies that contain semicolons.
+		if _, err = tx.Exec(ctx, string(contents)); err != nil {
+			tx.Rollback(ctx)
+			return applied, fmt.Errorf("migration %s: %w", name, err)
 		}
 		if _, err = tx.Exec(ctx, `INSERT INTO schema_migrations(version) VALUES($1)`, name); err != nil {
 			tx.Rollback(ctx)

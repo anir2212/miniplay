@@ -1,0 +1,8 @@
+MiniPlay chart {{ .Chart.Version }} rendered for release {{ .Release.Name }}.
+
+This chart has been linted and rendered but has never been deployed. Treat the
+first install on a cluster as a test of the chart itself.
+
+It expects Secret "{{ .Values.existingSecret }}" with DATABASE_URL, REDIS_URL,
+MINIPLAY_HMAC_SECRET and MINIPLAY_ADMIN_TOKEN, and PostgreSQL, Redis and Kafka
+running outside this chart. The score-svc autoscaler needs metrics-server.

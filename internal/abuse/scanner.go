@@ -31,13 +31,15 @@ func Scan(ctx context.Context, repo Repository, now time.Time) (ScanReport, erro
 		scores := make([]float64, 0)
 		for _, run := range runs {
 			if run.Game == id {
-				vector, err := Features(id, run.RunID, run.Score.Score, run.DurationMS, run.Events)
+				// The base score, so a double-points event cannot make ordinary
+				// runs look like outliers.
+				vector, err := Features(id, run.RunID, run.BaseScore, run.DurationMS, run.Events)
 				if err != nil {
 					return report, err
 				}
 				selected = append(selected, run)
 				features = append(features, vector)
-				scores = append(scores, float64(run.Score.Score))
+				scores = append(scores, float64(run.BaseScore))
 			}
 		}
 		if len(selected) < 30 {
@@ -54,7 +56,7 @@ func Scan(ctx context.Context, repo Repository, now time.Time) (ScanReport, erro
 		}
 		threshold := Quantile(isolation, 0.98)
 		for index, run := range selected {
-			z := ZScore(float64(run.Score.Score), scores)
+			z := ZScore(float64(run.BaseScore), scores)
 			reasons := Reasons(isolation[index], threshold, z)
 			if len(reasons) == 0 {
 				continue

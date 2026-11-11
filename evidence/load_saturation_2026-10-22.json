@@ -10,7 +10,7 @@
   "kafka": "apache/kafka:3.9.1 single-node KRaft, new container per run on 127.0.0.1:19092, topics score.events and score.deadletter with 3 partitions"
  },
  "variants": {
-  "base": "the previous version (each live socket has its own Redis subscription and rebuilds its own frame; gateway proxies use http.DefaultTransport)",
+  "base": "commit 0b3ac5e (each live socket has its own Redis subscription and rebuilds its own frame; gateway proxies use http.DefaultTransport)",
   "broadcaster": "base plus internal/httpapi/broadcast.go, the live.go and leaderboards.go changes, and store.Redis.Ranks; the gateway binary is byte-identical to base",
   "broadcaster+gateway_pool": "broadcaster plus cmd/gateway upstreamTransport (MaxIdleConnsPerHost 256); every other binary is byte-identical to broadcaster",
   "note": "load-probe was the same binary in every run (it adds a start_lag measurement to the committed probe)"
@@ -3237,7 +3237,7 @@
   }
  ],
  "final_ab_80_per_s_2026_10_23": {
-  "order": "base, broadcaster+gateway_pool, base, broadcaster+gateway_pool; each on a fresh stack with its own lock hold; binaries rebuilt from a temporary worktree at the previous version and from the final tree, byte-identical to the 22 October builds",
+  "order": "base, broadcaster+gateway_pool, base, broadcaster+gateway_pool; each on a fresh stack with its own lock hold; binaries rebuilt from a temporary worktree at 0b3ac5e and from the final tree, byte-identical to the 22 October builds",
   "conditions": "the laptop was on battery (29% falling to 25%) with Low Power Mode on; each run was wrapped in caffeinate -i to stop idle sleep",
   "runs": [
    {

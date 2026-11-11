@@ -13,7 +13,12 @@ import (
 
 type AttemptStore interface {
 	RecordAttempt(context.Context, store.Score, []game.Tap, string) (store.Score, error)
-	DoublePoints(context.Context, game.ID) (bool, error)
+}
+
+// FlagReader returns a game's double-points flag. The score service uses a
+// flags.Cache, whose answer is at most one TTL behind the table.
+type FlagReader interface {
+	Current(context.Context, game.ID) (store.Flag, error)
 }
 type ScoreCache interface {
 	Limiter
@@ -41,7 +46,12 @@ func validate(claims token.Claims, request Submission, nowMS int64) (int, string
 	return computed, ""
 }
 
-func ScoreHandler(signer *token.Signer, db AttemptStore, cache ScoreCache, clock func() int64) http.Handler {
+// ScoreHandler validates a run, then applies the double-points flag. The rule:
+// replay always checks the client's claim against the base score, and the flag
+// state this service holds when it accepts the submission decides the
+// multiplier. The state when the run was signed and any state during the run do
+// not count. The row records the base score, multiplier and flag version used.
+func ScoreHandler(signer *token.Signer, db AttemptStore, flags FlagReader, cache ScoreCache, clock func() int64) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", health)
 	mux.HandleFunc("POST /api/scores", func(w http.ResponseWriter, r *http.Request) {
@@ -74,16 +84,18 @@ func ScoreHandler(signer *token.Signer, db AttemptStore, cache ScoreCache, clock
 			failure(w, 429, "rate limit exceeded")
 			return
 		}
-		doubled, err := db.DoublePoints(r.Context(), claims.Game)
-		if err != nil {
-			failure(w, 503, "score service unavailable")
-			return
+		base, reason := validate(claims, request, clock())
+		row := store.Score{RunID: claims.RunID, User: claims.User, Game: claims.Game, DurationMS: request.DurationMS}
+		if reason == "" {
+			flag, err := flags.Current(r.Context(), claims.Game)
+			if err != nil {
+				slog.Error("read double-points flag; the run token stays usable", "error", err)
+				failure(w, 503, "score service unavailable")
+				return
+			}
+			row.BaseScore, row.Multiplier, row.FlagVersion = base, flag.Multiplier(), flag.Version
+			row.Score = base * row.Multiplier
 		}
-		computed, reason := validate(claims, request, clock())
-		if reason == "" && doubled {
-			computed *= 2
-		}
-		row := store.Score{RunID: claims.RunID, User: claims.User, Game: claims.Game, Score: computed, DurationMS: request.DurationMS}
 		saved, err := db.RecordAttempt(r.Context(), row, request.Events, reason)
 		if errors.Is(err, store.ErrDuplicate) {
 			failure(w, 409, "run already submitted")
