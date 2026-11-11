@@ -1,0 +1,69 @@
+{
+  "checked_at_utc": "2026-11-11T09:45:13.664806+00:00",
+  "source": "GitHub Checks API",
+  "pull_request": "https://github.com/anir2212/miniplay/pull/7",
+  "head_sha": "106f2bebe0db84857ad2410bda4a9f16d155328f",
+  "workflow_note": "Eight image variants built by GitHub Actions with push=false; this is build evidence, not a deployed image or runtime smoke.",
+  "checks": [
+    {
+      "name": "chart",
+      "conclusion": "success",
+      "details_url": "https://github.com/anir2212/miniplay/actions/runs/42996277521/job/130441070265"
+    },
+    {
+      "name": "go-test",
+      "conclusion": "success",
+      "details_url": "https://github.com/anir2212/miniplay/actions/runs/42996277521/job/130441070013"
+    },
+    {
+      "name": "images (admin-svc)",
+      "conclusion": "success",
+      "details_url": "https://github.com/anir2212/miniplay/actions/runs/42996277521/job/130442075064"
+    },
+    {
+      "name": "images (gateway)",
+      "conclusion": "success",
+      "details_url": "https://github.com/anir2212/miniplay/actions/runs/42996277521/job/130442075122"
+    },
+    {
+      "name": "images (leaderboard-svc)",
+      "conclusion": "success",
+      "details_url": "https://github.com/anir2212/miniplay/actions/runs/42996277521/job/130442075115"
+    },
+    {
+      "name": "images (migrate)",
+      "conclusion": "success",
+      "details_url": "https://github.com/anir2212/miniplay/actions/runs/42996277521/job/130442075086"
+    },
+    {
+      "name": "images (outbox-publisher)",
+      "conclusion": "success",
+      "details_url": "https://github.com/anir2212/miniplay/actions/runs/42996277521/job/130442075155"
+    },
+    {
+      "name": "images (score-svc)",
+      "conclusion": "success",
+      "details_url": "https://github.com/anir2212/miniplay/actions/runs/42996277521/job/130442075125"
+    },
+    {
+      "name": "images (session-svc)",
+      "conclusion": "success",
+      "details_url": "https://github.com/anir2212/miniplay/actions/runs/42996277521/job/130442075172"
+    },
+    {
+      "name": "images (stats-worker)",
+      "conclusion": "success",
+      "details_url": "https://github.com/anir2212/miniplay/actions/runs/42996277521/job/130442075052"
+    },
+    {
+      "name": "lint",
+      "conclusion": "success",
+      "details_url": "https://github.com/anir2212/miniplay/actions/runs/42996277521/job/130441070394"
+    },
+    {
+      "name": "web",
+      "conclusion": "success",
+      "details_url": "https://github.com/anir2212/miniplay/actions/runs/42996277521/job/130441070460"
+    }
+  ]
+}

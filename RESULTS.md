@@ -1,5 +1,10 @@
 # Measured results and acceptance
 
+## First GitHub Actions run — 11 November 2026
+
+On [PR #7](https://github.com/anir2212/miniplay/pull/7), all **12** check runs for head `106f2bebe` completed successfully: lint, Go race and opt-in PostgreSQL/Redis integration tests, web tests/build/Chrome smoke, chart validation, and Docker builds for the eight configured service commands. [Saved check metadata](evidence/ci_2026-11-11.json) records the check names and links. The image jobs used `push: false`; this verifies assembly on GitHub's runner, not a registry release, local image contents for every variant, a kind install, or running services together. The separate local `gateway` contents smoke below remains the only container inspection.
+
+
 Results below were collected locally on 2026-10-12, 2026-10-13, 2026-10-15, 2026-10-16, 2026-10-22, 2026-10-23, 2026-10-24, 2026-11-06 and 2026-11-11. Local load profiles were run on 2026-10-22, with a repeat A/B on 2026-10-23 (below); no GPU or cloud benchmark has been run.
 
 | Check | Result | Command or evidence |
@@ -48,7 +53,7 @@ The primary confusion matrix is **6 true positives, 0 false positives and 74 fal
 
 After checking 26 GiB of rounded host free space against the workspace's 20 GiB Docker startup gate, Docker Desktop 29.5.3 built **one** `gateway` variant from `deploy/Dockerfile`: `docker build --progress=plain -f deploy/Dockerfile --build-arg SERVICE=gateway -t miniplay/gateway:dev .`. The build passed. The local arm64 image ID was `sha256:3d039e564ccfdbe011bbaba538eccf0818f553cd0daaa9dd7e9c1163b5d405de`, size 7,549,221 bytes. An ephemeral non-root container checked `/app/app`, `web/dist/index.html` and migration 003 and printed UID 10001; it exited, leaving no MiniPlay container. [Build evidence](evidence/image_build_2026-11-11.json) records the commands and limits. Rounded free disk read 22 GiB afterward; other work shared the machine, so that change is not attributed solely to this build.
 
-The other seven service image variants, kind cluster, chart install, autoscaler event and GitHub Action have not run. The build proves this one image can be assembled and contains those files; it does not prove a running deployment or a real network path. Existing unrelated Docker containers were left untouched.
+At this local-build checkpoint, the other seven variants and remote workflow had not run; the later PR CI built all eight variants without pushing (see above). A kind cluster, chart install and autoscaler event remain untested. The build proves this one image can be assembled and contains those files; it does not prove a running deployment or a real network path. Existing unrelated Docker containers were left untouched.
 
 ## Admin portal, double-points flag, CI and Helm chart, 6 November 2026
 
@@ -99,7 +104,7 @@ The PostgreSQL tests cover: a flag change and audit row committing together, and
 
 | Check | Result | Limit |
 |---|---|---|
-| `actionlint` 1.7.12 on the workflow | 0 errors | Shell inside `run` steps was not checked: shellcheck is not installed. **The workflow has never run on GitHub** |
+| `actionlint` 1.7.12 on the workflow | 0 errors | Shell inside `run` steps was not checked: shellcheck is not installed. The workflow first ran on PR #7 on 11 November; see the new section above |
 | `golangci-lint` 2.15.0 | 0 issues | After `.golangci.yml` excluded best-effort cleanup from errcheck and quick-fix and style suggestions from staticcheck. The default set reported 37 (29 errcheck on cleanup calls, 8 staticcheck suggestions) |
 | `helm lint` 3.19.0 | 1 of 1 chart passed, with one note that an icon is recommended | |
 | `helm template` | 14 resources: 7 Deployments, 5 Services, 1 HorizontalPodAutoscaler, 1 Job. A missing Secret name or Kafka address stops rendering | Text only |
@@ -301,7 +306,7 @@ This is one functional run on one machine with demo users. It is not a load or l
 - Real-player labels and an independently designed cheat evaluation. The 11 November database-backed synthetic check closed the stored-run scanner path, but its recall was 0.075 on an authored, in-sample fixture and it bypassed signed HTTP sessions.
 - The 22 October combined run covered integration, worker restart, Redis loss and dead letters once; it is not repeated under load.
 - A load run from more than one machine, and with Redis outside Docker Desktop's port forwarding. The one-host probe runs out of ephemeral ports near 200 new games a second (22 October), so it cannot show where the services themselves stop. The before-and-after CPU profiles so far are of leaderboard-svc at 80 a second only.
-- Docker Compose (not written); the seven other image variants; a chart install on kind with an autoscaler scale event; any remote CI run. One local `gateway` image built and passed a contents smoke on 11 November. On 6 November the workflow and chart got local lint, render and schema checks only.
+- Docker Compose (not written); a chart install on kind with an autoscaler scale event; runtime inspection of the seven other image variants. One local `gateway` image passed a contents smoke on 11 November. PR #7 then passed all 12 GitHub Actions jobs, including eight build-only image variants; no image was pushed or deployed.
 - The admin portal and double-points flag with the real `score-svc` binary, Redis, Kafka, the outbox publisher and the stats worker together. The 6 November browser check used a Redis stand-in and no Kafka. The three Redis integration tests last ran in October, before this feature.
 
 The precision and recall above describe only this deterministic synthetic generator. No real-player detection claim is made, and no throughput or latency claim beyond the one-laptop measurements above.

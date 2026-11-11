@@ -1,5 +1,5 @@
-# Written for GitHub Actions. This repository has not been pushed, so this file has
-# never run on GitHub. See RESULTS.md for what was checked locally.
+# GitHub Actions first passed on PR #7 on 11 November 2026. See RESULTS.md
+# for the saved check metadata and the remaining runtime limits.
 name: CI
 
 on:
